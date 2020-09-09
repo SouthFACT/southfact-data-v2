@@ -1,5 +1,7 @@
 import ee, time, datetime, argparse, pdb
 ee.Initialize()
+ids_file = open("G:/productTranscript.txt", "w")
+
 states = ee.FeatureCollection("users/landsatfact/SGSF_states")
 
 # reference time.time
@@ -152,10 +154,8 @@ def oneBandDiff(compositeYearOne, compositeYearTwo, band1):
 # exports image to Google Drive
 def exportGeoTiff(image, exportName):
   geometries=states.map(getGeometry).getInfo().get('features')
-  #geometries=states.filter(ee.Filter.eq('name', 'North Carolina')).map(getGeometry).getInfo().get('features')
   # loop on client side
   for geom in geometries:
-    print ('geometries', geom['properties']['state_abbr'])
     task_config={'image':image,
                'region':ee.Geometry(geometry).intersection(ee.Feature(geom).geometry(),1).bounds().getInfo()['coordinates'],
                'description':exportName+geom['properties']['state_abbr'],
@@ -164,6 +164,25 @@ def exportGeoTiff(image, exportName):
                'formatOptions': {'cloudOptimized': True}}
     task = ee.batch.Export.image.toDrive(**task_config)
     task.start()
+    ids_file.write(',{0}'.format(task.id))
+    print ('task ID', task.id, geom['properties']['state_abbr'])
+    
+# exports image to Google Drive
+def exportGeoTiffToAsset(image, exportName):
+  geometries=states.map(getGeometry).getInfo().get('features')
+  # loop on client side
+  for geom in geometries:
+    task_config={'image':image,
+               'region':ee.Geometry(geometry).intersection(ee.Feature(geom).geometry(),1).bounds().getInfo()['coordinates'],
+               'description':exportName+geom['properties']['state_abbr'],
+               'scale':30,
+               'maxPixels':1e13,
+               'assetId': 'users/landsatfact/'+exportName+geom['properties']['state_abbr']}
+    task = ee.batch.Export.image.toAsset(**task_config)
+    task.start()
+    #ids_file.write(', {0}'.format(task.id))
+    print ('task ID', task.id, geom['properties']['state_abbr'])
+
 
 # exports image clear pixel percentage (clear pixel area and total state area in square meters) to Google Drive
 def exportCloudTable(image, exportName):
@@ -193,14 +212,14 @@ def sceneFeatures(scene):
 
 ag_array=collectionRangeStart.aggregate_array(dateID)
 fc = ee.FeatureCollection(ag_array.map(sceneFeatures))
-task_config={'collection': fc, 'description': 'scenesBegin'}	
-task = ee.batch.Export.table.toDrive(**task_config)
+task_config={'collection': fc.filterBounds(geometry), 'description': 'scenesBegin', 'assetId': 'users/landsatfact/scenesBegin'}	
+task = ee.batch.Export.table.toAsset(**task_config)
 task.start()
 
 ag_array=collectionRangeEnd.aggregate_array(dateID)
 fc = ee.FeatureCollection(ag_array.map(sceneFeatures))
-task_config={'collection': fc, 'description': 'scenesBegin'}	
-task = ee.batch.Export.table.toDrive(**task_config)
+task_config={'collection': fc.filterBounds(geometry), 'description': 'scenesEnd', 'assetId': 'users/landsatfact/scenesEnd'}	
+task = ee.batch.Export.table.toAsset(**task_config)
 task.start()
 
 compositeRangeStart = collectionRangeStart.map(mask).median()
@@ -208,10 +227,6 @@ compositeRangeEnd = collectionRangeEnd.map(mask).median()
 
 compositeStartYear = compositeRangeEnd # Start Year average - "custom request"
 compositeSecondYear = compositeRangeStart # Second Year average - "custom request"
-
-#export datetimes used for pixel values in one year of changes over the start and second years
-exportGeoTiff(compositeStartYear.select('system:time_start'), 'datesBegin'+ str(startYear))
-exportGeoTiff(compositeSecondYear.select('system:time_start'), 'datesEnd'+ str(startYear))
 
 # add the NDWI band to the image so we can get water masks
 ndwi = compositeStartYear.normalizedDifference([green, swir1]).rename('NDWI')
@@ -243,3 +258,8 @@ exportGeoTiff(NDVIChangeCustomRange, 'NDVI-Latest-Change-Between-'+str(startYear
 exportGeoTiff(SWIRChangeCustomRange, 'SWIR-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear))
 exportGeoTiff(NDMIChangeCustomRange, 'NDMI-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear))
 
+#export datetimes used for pixel values in one year of changes over the start and second years
+exportGeoTiffToAsset(compositeStartYear.select(['system:time_start'], ['observationDate']), 'datesBegin'+ str(startYear))
+exportGeoTiffToAsset(compositeSecondYear.select(['system:time_start'], ['observationDate']), 'datesEnd'+ str(startYear))
+
+ids_file.close()
