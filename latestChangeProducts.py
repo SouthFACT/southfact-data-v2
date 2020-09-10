@@ -1,9 +1,14 @@
 import ee, time, datetime, argparse, pdb
-ee.Initialize()
-ids_file = open("G:/productTranscript.txt", "w")
 
-states = ee.FeatureCollection("users/landsatfact/SGSF_states")
-
+def parseCmdLine():
+    # Will parse the arguments provided on the command line.
+    # download dir and output regional TIFF full path are mandatory.
+    parser = argparse.ArgumentParser(description='Generate GEE latest change products')
+    parser.add_argument('ids_file', help='the fullpath where export to Drive task ids will be stored e.g., G:/productTranscript.txt ')
+    parser.add_argument('metadata_ids_file', help='the fullpath where export to Asset task ids will be stored e.g., G:/productTranscript.txt ')
+    ns = parser.parse_args()
+    return [ns.ids_file, ns.metadata_ids_file]
+    
 # reference time.time
 # Return the current time in seconds since the Epoch.
 # Fractions of a second may be present if the system clock provides them.
@@ -13,29 +18,7 @@ states = ee.FeatureCollection("users/landsatfact/SGSF_states")
 def now_milliseconds():
    return int(time.time() * 1000)
 
-mstimeone = now_milliseconds()
 
-#convert to server-side datetime
-t2 = ee.Date(mstimeone)
-startYear = t2.get('year').getInfo()
-t3 = t2.advance(-1, 'year')
-secondYear = t3.get('year').getInfo()
-
-t4 = t3.advance(-1, 'year')
-beginWinter = t4.get('year')
-endWinter =(t2.advance(+1, 'year').get('year'))
-endWinterDate=ee.Date.fromYMD(endWinter, 3, 31, 'America/New_York')
-lastWinterBeginDate=ee.Date.fromYMD(secondYear, 11, 1, 'America/New_York')
-lastWinterEndDate=ee.Date.fromYMD(startYear, 3, 31, 'America/New_York')
-curentYearBeginDate=ee.Date.fromYMD(startYear, 1, 1, 'America/New_York')
-#print('years', startYear, secondYear, beginWinter,endWinter)
-
-LANDSAT8 = 'LANDSAT/LC08/C01/T1_SR'
-Sentinel2 = 'COPERNICUS/S2'
-
-landsat_sat = 'L8'  # L8 or S2 
-
-geometry = states.geometry(1).simplify(1000)
 # used in client-side export of state products
 def getGeometry(feature):
   # Keep this list of properties.
@@ -83,40 +66,7 @@ def addDateBand(image):
   #.set('system:time_start', img.get('system:time_start'))
   return image.addBands(image.metadata('system:time_start')).copyProperties(image)
 
-# defaults
-LANDSAT = LANDSAT8
-nir = 'B5'
-red = 'B4'
-blue = 'B2'
-green = 'B3'
-swir1 = 'B6'
-swir2 = 'B7'
-waterThreshold = 0
-mask = maskLandsatClouds
-dateID = 'LANDSAT_ID'
 
-# set default bands and cloud mask
-if landsat_sat=='L8':
-    nir = 'B5'
-    red = 'B4'
-    blue = 'B2'
-    green = 'B3'
-    swir1 = 'B6'
-    swir2 = 'B7'
-    LANDSAT = LANDSAT8
-    mask = maskLandsatClouds
-    dateID = 'LANDSAT_ID'
-elif landsat_sat=='S2':
-    nir = 'B8'
-    red = 'B4'
-    blue = 'B2'
-    green = 'B3'
-    swir1 = 'B11'
-    swir2 = 'B12'
-    LANDSAT = Sentinel2
-    mask = maskS2Clouds
-    dateID = 'DATATAKE_IDENTIFIER'
-	
 # use gee normalizedDifference
 def normDiff(image, band1, band2):
   return image.normalizedDifference([band1, band2])
@@ -199,6 +149,69 @@ def exportCloudTable(image, exportName):
     task = ee.batch.Export.table.toDrive(**task_config)
     task.start()   
 
+def sceneFeatures(scene):
+  return ee.Feature(None, {'value': scene})
+
+ee.Initialize()
+ids_file, metadata_ids_file = parseCmdLine() 
+ids_file = open(ids_file, "w")
+metadata_ids_file = open(metadata_ids_file, "w")
+mstimeone = now_milliseconds()
+
+#convert to server-side datetime
+t2 = ee.Date(mstimeone)
+startYear = t2.get('year').getInfo()
+t3 = t2.advance(-1, 'year')
+secondYear = t3.get('year').getInfo()
+
+t4 = t3.advance(-1, 'year')
+beginWinter = t4.get('year')
+endWinter =(t2.advance(+1, 'year').get('year'))
+endWinterDate=ee.Date.fromYMD(endWinter, 3, 31, 'America/New_York')
+lastWinterBeginDate=ee.Date.fromYMD(secondYear, 11, 1, 'America/New_York')
+lastWinterEndDate=ee.Date.fromYMD(startYear, 3, 31, 'America/New_York')
+curentYearBeginDate=ee.Date.fromYMD(startYear, 1, 1, 'America/New_York')
+
+LANDSAT8 = 'LANDSAT/LC08/C01/T1_SR'
+Sentinel2 = 'COPERNICUS/S2'
+
+landsat_sat = 'L8'  # L8 or S2 
+# set default bands and cloud mask
+if landsat_sat=='L8':
+    nir = 'B5'
+    red = 'B4'
+    blue = 'B2'
+    green = 'B3'
+    swir1 = 'B6'
+    swir2 = 'B7'
+    LANDSAT = LANDSAT8
+    mask = maskLandsatClouds
+    dateID = 'LANDSAT_ID'
+elif landsat_sat=='S2':
+    nir = 'B8'
+    red = 'B4'
+    blue = 'B2'
+    green = 'B3'
+    swir1 = 'B11'
+    swir2 = 'B12'
+    LANDSAT = Sentinel2
+    mask = maskS2Clouds
+    dateID = 'DATATAKE_IDENTIFIER'
+
+# defaults
+LANDSAT = LANDSAT8
+nir = 'B5'
+red = 'B4'
+blue = 'B2'
+green = 'B3'
+swir1 = 'B6'
+swir2 = 'B7'
+waterThreshold = 0
+mask = maskLandsatClouds
+dateID = 'LANDSAT_ID'
+
+states = ee.FeatureCollection("users/landsatfact/SGSF_states")
+geometry = states.geometry(1).simplify(1000)
 # Collect one year of changes over the start and second years, for a date range  
 # from the beginning of secondYear winter in secondYear - 1 to end of startYear winter in startYear + 1
 # early in the year (before 3/31) use at least 30 days of data 
@@ -206,9 +219,6 @@ def exportCloudTable(image, exportName):
 # later in the year restrict this range to the end of winter (3/31)
 collectionRangeStart = ee.ImageCollection(LANDSAT).filterDate(lastWinterBeginDate,t2.advance(-30,'day')).filterDate(lastWinterBeginDate, lastWinterEndDate).map(addDateBand)
 collectionRangeEnd = ee.ImageCollection(LANDSAT).filterDate(curentYearBeginDate, endWinterDate).map(addDateBand)
-
-def sceneFeatures(scene):
-  return ee.Feature(None, {'value': scene})
 
 ag_array=collectionRangeStart.aggregate_array(dateID)
 fc = ee.FeatureCollection(ag_array.map(sceneFeatures))
