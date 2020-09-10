@@ -127,7 +127,7 @@ def exportGeoTiffToAsset(image, exportName):
                'description':exportName+geom['properties']['state_abbr'],
                'scale':30,
                'maxPixels':1e13,
-               'assetId': 'users/landsatfact/'+exportName+geom['properties']['state_abbr']}
+               'assetId': exportName+geom['properties']['state_abbr']}
     task = ee.batch.Export.image.toAsset(**task_config)
     task.start()
     #ids_file.write(', {0}'.format(task.id))
@@ -219,7 +219,7 @@ geometry = states.geometry(1).simplify(1000)
 # later in the year restrict this range to the end of winter (3/31)
 collectionRangeStart = ee.ImageCollection(LANDSAT).filterDate(lastWinterBeginDate,t2.advance(-30,'day')).filterDate(lastWinterBeginDate, lastWinterEndDate).map(addDateBand)
 collectionRangeEnd = ee.ImageCollection(LANDSAT).filterDate(curentYearBeginDate, endWinterDate).map(addDateBand)
-
+"""
 ag_array=collectionRangeStart.aggregate_array(dateID)
 fc = ee.FeatureCollection(ag_array.map(sceneFeatures))
 task_config={'collection': fc.filterBounds(geometry), 'description': 'scenesBegin', 'assetId': 'users/landsatfact/scenesBegin'}	
@@ -231,7 +231,7 @@ fc = ee.FeatureCollection(ag_array.map(sceneFeatures))
 task_config={'collection': fc.filterBounds(geometry), 'description': 'scenesEnd', 'assetId': 'users/landsatfact/scenesEnd'}	
 task = ee.batch.Export.table.toAsset(**task_config)
 task.start()
-
+"""
 compositeRangeStart = collectionRangeStart.map(mask).median()
 compositeRangeEnd = collectionRangeEnd.map(mask).median()
 
@@ -269,7 +269,7 @@ exportGeoTiff(SWIRChangeCustomRange, 'SWIR-Latest-Change-Between-'+str(startYear
 exportGeoTiff(NDMIChangeCustomRange, 'NDMI-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear))
 
 #export datetimes used for pixel values in one year of changes over the start and second years
-exportGeoTiffToAsset(compositeStartYear.select(['system:time_start'], ['observationDate']), 'datesBegin'+ str(startYear))
-exportGeoTiffToAsset(compositeSecondYear.select(['system:time_start'], ['observationDate']), 'datesEnd'+ str(startYear))
+#exportGeoTiffToAsset(compositeStartYear.select(['system:time_start'], ['observationDate']), 'datesBegin'+ str(startYear))
+#exportGeoTiffToAsset(compositeSecondYear.select(['system:time_start'], ['observationDate']), 'datesEnd'+ str(startYear))
 
 ids_file.close()
