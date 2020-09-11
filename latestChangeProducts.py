@@ -109,6 +109,7 @@ def exportGeoTiff(image, exportName):
     task_config={'image':image,
                'region':ee.Geometry(geometry).intersection(ee.Feature(geom).geometry(),1).bounds().getInfo()['coordinates'],
                'description':exportName+geom['properties']['state_abbr'],
+               'folder': 'users/landsatfact/LatestChangeProducts/',
                'scale':30,
                'maxPixels':1e13,
                'formatOptions': {'cloudOptimized': True}}
