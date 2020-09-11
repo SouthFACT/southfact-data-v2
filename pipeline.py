@@ -123,7 +123,7 @@ def main():
                 credentials_file, SCOPES)
             creds = flow.run_local_server(port=0)
         # Save the credentials for the next run
-        with open('G:/keys/token.pickle', 'wb') as token:
+        with open(drive_key_file, 'wb') as token:
             pickle.dump(creds, token)
     service = build('drive', 'v3', credentials=creds)
     ee.Initialize()
