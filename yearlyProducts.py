@@ -213,7 +213,8 @@ def exportGeoTiff(image, exportName):
                'formatOptions': {'cloudOptimized': True}}
     task = ee.batch.Export.image.toDrive(**task_config)
     task.start()
-
+    ids_file.write(',{0}'.format(task.id))
+	
 sgsf = ee.FeatureCollection("users/landsatfact/SGSF")
 states = ee.FeatureCollection("users/landsatfact/SGSF_states")
 	
