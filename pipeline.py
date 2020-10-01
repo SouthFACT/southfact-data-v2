@@ -20,8 +20,6 @@ from os.path import isfile, join
 
 def parseCmdLine():
     # Will parse the arguments provided on the command line.
-    # download dir and output regional TIFF full path are mandatory.
-    #pdb.set_trace()
     parser = argparse.ArgumentParser(description='Download GEE products and create regional GeoTIFF')
     parser.add_argument('downloadDir', help='download directory e.g., C:/Users/smith/Downloads/ ')
     parser.add_argument('outputGeoTIFFDir', help='GeoTIFF directory e.g., G:/latestChange/')
@@ -58,7 +56,6 @@ def translateToGeoTIFF(inRaster, outRasterPath):
 
 def download(filename, fileId, service):
     # download to disk and remove from drive
-    #pdb.set_trace()   
     print(filename)    
     request = service.files().get_media(fileId=fileId)
     fh = io.FileIO(os.path.expandvars('%userprofile%/Downloads/' + filename), 'wb')
@@ -96,7 +93,7 @@ def completedTasksRemaining(ids):
     myCompletedTasks=list(filter(lambda x: x['state'] == 'COMPLETED', myTasks))
     outstandingCompletedTasks=len(myCompletedTasks)
     print('completed tasks: {0}'.format(outstandingCompletedTasks))
-    return outstandingCompletedTasks<45
+    return outstandingCompletedTasks<len(ids)
     
 # If modifying these scopes, delete the file token.pickle.
 SCOPES = ['https://www.googleapis.com/auth/drive']
@@ -130,6 +127,7 @@ def main():
     text_file = open(ids_file, "r")
     ids = text_file.read().split(',')
     ids = list(filter(None, ids))
+    #pdb.set_trace()
     print('Begin download at {0}'.format(datetime.datetime.now().strftime("%a, %d %B %Y %I:%M:%S")))
     while True:
         results = service.files().list(pageSize=50, fields="nextPageToken, files(id, name)").execute()
@@ -140,24 +138,38 @@ def main():
         print("Waiting for exports to complete.")
         time.sleep(15*60) # Delay for 15 minutes.
         # if there's nothing let to do, quit
-        if not (pendingTasks(ids) or completedTasksRemaining(ids) or successfulDownloads < 45):
+        if not (pendingTasks(ids) or completedTasksRemaining(ids) or successfulDownloads < len(ids)):
             break
-
+    # Mainland Southern states mosaic
     print('Begin mosaic to geotiff at {0}'.format(datetime.datetime.now().strftime("%a, %d %B %Y %I:%M:%S")))
     os.chdir(downloadDir)
     p = re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(LA|AR|MS|KY|TN|OK|VA|SC|NC|GA|AL|TX|FL)')  
     onlyfiles = [f for f in os.listdir(downloadDir) if isfile(join(downloadDir, f))]    
     mosaic([s for s in onlyfiles if p.match(s)], downloadDir+'swirLatestChange.tif')
     translateToGeoTIFF(downloadDir+'swirLatestChange.tif', outputGeoTIFFDir+'swirLatestChange.tif')
+    # PR|VI SWIR mosaic
+    p = re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(PR|VI)')  
+    onlyfiles = [f for f in os.listdir(downloadDir) if isfile(join(downloadDir, f))]    
+    mosaic([s for s in onlyfiles if p.match(s)], downloadDir+'swirLatestChange.tif')
+    translateToGeoTIFF(downloadDir+'swirLatestChange.tif', outputGeoTIFFDir+'swirLatestChangePRVI.tif')
     p = re.compile('NDMI(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(LA|AR|MS|KY|TN|OK|VA|SC|NC|GA|AL|TX|FL)')  
     onlyfiles = [f for f in os.listdir(downloadDir) if isfile(join(downloadDir, f))]    
     mosaic([s for s in onlyfiles if p.match(s)], downloadDir+'ndmiLatestChange.tif')
     translateToGeoTIFF(downloadDir+'ndmiLatestChange.tif', outputGeoTIFFDir+'ndmiLatestChange.tif')
+    # PR|VI mosaic NDMI
+    p = re.compile('NDMI(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(PR|VI)')  
+    onlyfiles = [f for f in os.listdir(downloadDir) if isfile(join(downloadDir, f))]    
+    mosaic([s for s in onlyfiles if p.match(s)], downloadDir+'ndmiLatestChange.tif')
+    translateToGeoTIFF(downloadDir+'ndmiLatestChange.tif', outputGeoTIFFDir+'ndmiLatestChange.PRVItif')
     p = re.compile('NDVI(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(LA|AR|MS|KY|TN|OK|VA|SC|NC|GA|AL|TX|FL)')  
     onlyfiles = [f for f in os.listdir(downloadDir) if isfile(join(downloadDir, f))]    
     mosaic([s for s in onlyfiles if p.match(s)], downloadDir+'ndviLatestChange.tif')
     translateToGeoTIFF(downloadDir+'ndviLatestChange.tif', outputGeoTIFFDir+'ndviLatestChange.tif')
-
+    # PR|VI NDVI mosaic
+    p = re.compile('NDVI(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(PR|VI)')  
+    onlyfiles = [f for f in os.listdir(downloadDir) if isfile(join(downloadDir, f))]    
+    mosaic([s for s in onlyfiles if p.match(s)], downloadDir+'ndviLatestChange.tif')
+    translateToGeoTIFF(downloadDir+'ndviLatestChange.tif', outputGeoTIFFDir+'ndviLatestChangePRVI.tif')
     print ('Finished at {0}'.format(datetime.datetime.now().strftime("%a, %d %B %Y %I:%M:%S")))
 
 if __name__ == '__main__':
