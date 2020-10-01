@@ -330,7 +330,7 @@ SWIR_THRESHOLD_SLD = ('<RasterSymbolizer>'
 #exportGeoTiff(NDVIChangeCustomRange, 'NDVI-Custom-Range-Change-Between-'+startYear+'-and-'+secondYear)
 
 #exportGeoTiff(SWIRChangeCustomRange.sldStyle(SWIR_THRESHOLD_SLD), 'SWIR-Custom-Range-Change-Between-'+startYear+'-and-'+secondYear)
-exportGeoTiff(SWIRChangeCustomRange, 'SWIR-Custom-Range-Change-Between-'+startYear+'-and-'+secondYear)
+exportGeoTiff(SWIRChangeCustomRange, 'SWIR-Custom-Change-Between-'+startYear+'-and-'+secondYear)
 
 
 #exportGeoTiff(NDMIChangeCustomRange, 'NDMI-Custom-Range-Change-Between-'+startYear+'-and-'+secondYear)
