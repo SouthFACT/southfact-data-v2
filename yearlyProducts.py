@@ -1,38 +1,85 @@
 import ee, datetime, argparse
 ee.Initialize()
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="""
-    Generate statewide products for SGSF region. 
-    """)
+def parseCmdLine():
+    # Will parse the arguments provided on the command line.
+    parser = argparse.ArgumentParser(description='Generate statewide products for SGSF region.')
     parser.add_argument("startYear", help="string, the current year")
+    parser.add_argument('ids_file', help='the fullpath where export to Drive task ids will be stored e.g., G:/productTranscript.txt ')
+    parser.add_argument('metadata_ids_file', help='the fullpath where export to Asset task ids will be stored e.g., G:/productTranscript.txt ')
+    ns = parser.parse_args()
+    return [ns.startYear, ns.ids_file, ns.metadata_ids_file]
+def getGeometry(feature):
+  # Keep this list of properties.
+  keepProperties = ['state_abbr']
+  # Get the centroid of the feature's geometry.
+  geom = feature.geometry().bounds()
+  # Return a new Feature, copying properties from the old Feature.
+  return ee.Feature(geom).copyProperties(feature, keepProperties)
 
-    args = parser.parse_args()
+# /**
+# * Function to mask clouds using the Sentinel-2 QA band
+# * @param {ee.Image} image Sentinel-2 image
+# * @return {ee.Image} cloud masked Sentinel-2 image
+# */
+def maskS2Clouds(image):
+  qa = image.select('QA60')
 
-    startYear = args.startYear
+  # Bits 10 and 11 are clouds and cirrus, respectively.
+  cloudBitMask = 1 << 10
+  cirrusBitMask = 1 << 11
 
-sgsf = ee.FeatureCollection("users/landsatfact/SGSF")
-states = ee.FeatureCollection("users/landsatfact/SGSF_states")
-	
-dataset = ee.ImageCollection('USDA/NAIP/DOQQ').filter(ee.Filter.date('2016-01-01', '2018-12-31'))
-trueColor = dataset.select(['R', 'G', 'B'])
-trueColorVis = { 
-  'min': 0.0,
-  'max': 255.0,
-}
+  # Both flags should be set to zero, indicating clear conditions.
+  mask = qa.bitwiseAnd(cloudBitMask).eq(0).And(qa.bitwiseAnd(cirrusBitMask).eq(0))
 
-LANDSAT8 = 'LANDSAT/LC08/C01/T1_SR'
-Sentinel2 = 'COPERNICUS/S2'
+  return image.updateMask(mask).divide(10000)
 
-landsat_sat = 'L8'  # L8 or S2 
-beginDay='-11-01'
-endDay='-03-31'
+# Function to cloud mask from the pixel_qa band of Landsat 8 SR data.
+def maskLandsatClouds(image):
+  # Bits 3 and 5 are cloud shadow and cloud, respectively.
+  cloudShadowBitMask = 1 << 3
+  cloudsBitMask = 1 << 5
 
-secondYear = str(int(startYear)-1)
-beginWinter = str(int(secondYear)-1)
-endWinter = str(int(startYear)+1)
+  # Get the pixel QA band.
+  qa = image.select('pixel_qa')
 
-geometry = states.geometry(1).simplify(1000)
+  # Both flags should be set to zero, indicating clear conditions.
+  mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0).And(qa.bitwiseAnd(cloudsBitMask).eq(0))
+
+  # Return the masked image, scaled to TOA reflectance, without the QA bands.
+  return image.updateMask(mask).divide (10000).select("B[0-9]*").addBands(qa).copyProperties(image, ["system:time_start"])
+
+# supply cloud masked percentage of scenes used
+def exportStats (clouds, geom):
+  masked=clouds.select('clouds').Not()
+  unmasked=clouds.mask()
+  
+  # Sum the area of clear pixels (unmasked in cloud band, equals 1)
+  geometries=states.map(getGeometry).getInfo().get('features')
+  #geometries=states.filter(ee.Filter.eq('name', 'North Carolina')).map(getGeometry).getInfo().get('features')
+  # loop on client side
+  for g in geometries:
+    #args={'collection': ee.FeatureCollection(ee.Geometry(g['geometry'])),'reducer': ee.Reducer.sum(),'scale': 30, 'tileScale': 8}
+    areaImage = masked.multiply(ee.Image.pixelArea())
+    # Sum the area of cloudy pixels (masked in cloud band not, equals 1)
+    statsCloudy = areaImage.reduceRegions(ee.FeatureCollection(ee.Geometry(g['geometry'])),ee.Reducer.sum(),30)
+    areaImage = unmasked.multiply(ee.Image.pixelArea())
+    # Sum the area of clear pixels (unmasked in cloud band, equals 1)
+    statsClear = areaImage.reduceRegions(ee.FeatureCollection(ee.Geometry(g['geometry'])),ee.Reducer.sum(),30)
+
+    #print('stats', statsCloudy.merge(statsClear))
+    prefix='clouds'
+    results = ee.FeatureCollection(statsCloudy.merge(statsClear))
+    tag = g['properties']['state_abbr']
+    task=ee.batch.Export.table.toDrive(results, prefix+tag)
+    task.start()
+
+# for the entire imagecollection, get the pct of remaining cloud masked pixels 
+def buildCloudPct(cloudCollection):
+  #var cloudCollection = collection.select('clouds')
+  cloudMin = cloudCollection.max()
+  exportStats(cloudCollection.max(), cloudCollection.geometry())
+
 # used in client-side export of state products
 def getGeometry(feature):
   # Keep this list of properties.
@@ -59,7 +106,6 @@ def maskS2Clouds(image):
 
   return image.updateMask(mask).divide(10000)
 
-  
 # Function to cloud mask from the pixel_qa band of Landsat 8 SR data.
 def maskLandsatClouds(image):
   # Bits 3 and 5 are cloud shadow and cloud, respectively.
@@ -111,13 +157,82 @@ def exportStats (clouds, geom):
     task=ee.batch.Export.table.toDrive(results, prefix+tag)
     task.start()
 
-
 # for the entire imagecollection, get the pct of remaining cloud masked pixels 
 def buildCloudPct(cloudCollection):
   #var cloudCollection = collection.select('clouds')
   cloudMin = cloudCollection.max()
   exportStats(cloudCollection.max(), cloudCollection.geometry())
+# use gee normalizedDifference
+def normDiff(image, band1, band2):
+  return image.normalizedDifference([band1, band2])
 
+# force percent change image into a 0-255 range so it is true 8 bit image
+def make255(image, band):
+  imageLT127 = image.expression('b1 > 127 ? 127 : b1' ,{'b1': image.select(band)})
+  image127 = imageLT127.expression('b1 < -127 ? -127 : b1' ,{'b1': imageLT127.select(band)})
+  image255 = image127.add(128)
+  return image255.uint8()
+
+# use gee normalizedDifference to get change in two filtered datasets
+def normDiffChange(compositeYearOne, compositeYearTwo, band1, band2):
+  yearOneNormDiff = compositeYearOne.normalizedDifference([band1, band2]) 
+  yearTwoNormDiff = compositeYearTwo.normalizedDifference([band1, band2])  
+  changeYearOneYearTwo = yearTwoNormDiff.subtract(yearOneNormDiff)
+  YearTwoABS = yearOneNormDiff.abs()
+  YearOneYearTwoDivide = changeYearOneYearTwo.divide(YearTwoABS)
+  YearOneYearTwoPercent = YearOneYearTwoDivide.multiply(100)
+  band255 = 'nd'
+  image255 = make255(YearOneYearTwoPercent, band255)
+  return image255
+
+# use one band and get difference (change)
+def oneBandDiff(compositeYearOne, compositeYearTwo, band1):
+  yearOneImg = compositeYearOne.select([band1])
+  yearTwoImg = compositeYearTwo.select([band1])
+  changeYearOneYearTwo = yearTwoImg.subtract(yearOneImg)
+  yearOneImgABS = yearOneImg.abs()
+  YearOneYearTwoDivide = changeYearOneYearTwo.divide(yearOneImgABS)
+  YearOneYearTwoPercent = YearOneYearTwoDivide.multiply(100) 
+  image255 = make255(YearOneYearTwoPercent, band1)
+  return image255
+
+# exports image to Google Drive
+def exportGeoTiff(image, exportName):
+  #print(states.aggregate_array('state_abbr'))
+  geometries=states.map(getGeometry).getInfo().get('features')
+  #geometries=states.filter(ee.Filter.eq('name', 'North Carolina')).map(getGeometry).getInfo().get('features')
+  # loop on client side
+  #https://gis.stackexchange.com/questions/326131/error-in-export-image-from-google-earth-engine-from-python-api
+  for geom in geometries:
+    print ('geometries', geom['properties']['state_abbr'])
+    task_config={'image':image,
+               'region':ee.Geometry(geometry).intersection(ee.Feature(geom).geometry(),1).bounds().getInfo()['coordinates'],
+               'description':exportName+geom['properties']['state_abbr'],
+               'scale':30,
+               'maxPixels':1e13,
+               'formatOptions': {'cloudOptimized': True}}
+    task = ee.batch.Export.image.toDrive(**task_config)
+    task.start()
+
+sgsf = ee.FeatureCollection("users/landsatfact/SGSF")
+states = ee.FeatureCollection("users/landsatfact/SGSF_states")
+	
+
+startYear, ids_file, metadata_ids_file = parseCmdLine() 
+ids_file = open(ids_file, "w")
+metadata_ids_file = open(metadata_ids_file, "w")
+LANDSAT8 = 'LANDSAT/LC08/C01/T1_SR'
+Sentinel2 = 'COPERNICUS/S2'
+
+landsat_sat = 'L8'  # L8 or S2 
+beginDay='-11-01'
+endDay='-03-31'
+
+secondYear = str(int(startYear)-1)
+beginWinter = str(int(secondYear)-1)
+endWinter = str(int(startYear)+1)
+
+geometry = states.geometry(1).simplify(1000)
 
 # defaults
 LANDSAT = LANDSAT8
@@ -149,72 +264,7 @@ elif landsat_sat=='S2':
     swir2 = 'B12'
     LANDSAT = Sentinel2
     mask = maskS2Clouds
- 
-# use gee normalizedDifference
-def normDiff(image, band1, band2):
-  return image.normalizedDifference([band1, band2])
 
-
-# force percent change image into a 0-255 range so it is true 8 bit image
-def make255(image, band):
-  imageLT127 = image.expression('b1 > 127 ? 127 : b1' ,{'b1': image.select(band)})
-  image127 = imageLT127.expression('b1 < -127 ? -127 : b1' ,{'b1': imageLT127.select(band)})
-  image255 = image127.add(128)
-  return image255.uint8()
-
-# use gee normalizedDifference to get change in two filtered datasets
-def normDiffChange(compositeYearOne, compositeYearTwo, band1, band2):
-  yearOneNormDiff = compositeYearOne.normalizedDifference([band1, band2]) 
-  yearTwoNormDiff = compositeYearTwo.normalizedDifference([band1, band2]) 
-  
-  changeYearOneYearTwo = yearTwoNormDiff.subtract(yearOneNormDiff)
-  
-  YearTwoABS = yearOneNormDiff.abs()
-
-  YearOneYearTwoDivide = changeYearOneYearTwo.divide(YearTwoABS)
-  
-  YearOneYearTwoPercent = YearOneYearTwoDivide.multiply(100)
-  
-  band255 = 'nd'
-  image255 = make255(YearOneYearTwoPercent, band255)
-  
-  return image255
-
-
-# use one band and get difference (change)
-def oneBandDiff(compositeYearOne, compositeYearTwo, band1):
-  yearOneImg = compositeYearOne.select([band1])
-  yearTwoImg = compositeYearTwo.select([band1])
-
-  changeYearOneYearTwo = yearTwoImg.subtract(yearOneImg)
-  
-  yearOneImgABS = yearOneImg.abs()
-
-  YearOneYearTwoDivide = changeYearOneYearTwo.divide(yearOneImgABS)
-  
-  YearOneYearTwoPercent = YearOneYearTwoDivide.multiply(100)
-  
-  image255 = make255(YearOneYearTwoPercent, band1)
-  
-  return image255
-
-# exports image to Google Drive
-def exportGeoTiff(image, exportName):
-  #print(states.aggregate_array('state_abbr'))
-  geometries=states.map(getGeometry).getInfo().get('features')
-  #geometries=states.filter(ee.Filter.eq('name', 'North Carolina')).map(getGeometry).getInfo().get('features')
-  # loop on client side
-  #https://gis.stackexchange.com/questions/326131/error-in-export-image-from-google-earth-engine-from-python-api
-  for geom in geometries:
-    print ('geometries', geom['properties']['state_abbr'])
-    task_config={'image':image,
-               'region':ee.Geometry(geometry).intersection(ee.Feature(geom).geometry(),1).bounds().getInfo()['coordinates'],
-               'description':exportName+geom['properties']['state_abbr'],
-               'scale':30,
-               'maxPixels':1e13,
-               'formatOptions': {'cloudOptimized': True}}
-    task = ee.batch.Export.image.toDrive(**task_config)
-    task.start()
 
 # Collect one year of changes over the start and second years, for a date range  
 # from the beginning of secondYear winter in secondYear - 1 to end of startYear winter in startYear + 1
