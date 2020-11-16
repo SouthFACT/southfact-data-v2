@@ -1,4 +1,6 @@
-import ee, datetime, argparse
+import ee, datetime, argparse, pdb
+from userConfig import USERNAME
+
 ee.Initialize()
 
 def parseCmdLine():
@@ -34,6 +36,11 @@ def maskS2Clouds(image):
 
   return image.updateMask(mask).divide(10000)
 
+# add band to identify unix time of every pixel used in the composite
+def addDateBand(image): 
+  #.set('system:time_start', img.get('system:time_start'))
+  return image.addBands(image.metadata('system:time_start')).copyProperties(image)
+  
 # Function to cloud mask from the pixel_qa band of Landsat 8 SR data.
 def maskLandsatClouds(image):
   # Bits 3 and 5 are cloud shadow and cloud, respectively.
@@ -47,38 +54,7 @@ def maskLandsatClouds(image):
   mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0).And(qa.bitwiseAnd(cloudsBitMask).eq(0))
 
   # Return the masked image, scaled to TOA reflectance, without the QA bands.
-  return image.updateMask(mask).divide (10000).select("B[0-9]*").addBands(qa).copyProperties(image, ["system:time_start"])
-
-# supply cloud masked percentage of scenes used
-def exportStats (clouds, geom):
-  masked=clouds.select('clouds').Not()
-  unmasked=clouds.mask()
-  
-  # Sum the area of clear pixels (unmasked in cloud band, equals 1)
-  geometries=states.map(getGeometry).getInfo().get('features')
-  #geometries=states.filter(ee.Filter.eq('name', 'North Carolina')).map(getGeometry).getInfo().get('features')
-  # loop on client side
-  for g in geometries:
-    #args={'collection': ee.FeatureCollection(ee.Geometry(g['geometry'])),'reducer': ee.Reducer.sum(),'scale': 30, 'tileScale': 8}
-    areaImage = masked.multiply(ee.Image.pixelArea())
-    # Sum the area of cloudy pixels (masked in cloud band not, equals 1)
-    statsCloudy = areaImage.reduceRegions(ee.FeatureCollection(ee.Geometry(g['geometry'])),ee.Reducer.sum(),30)
-    areaImage = unmasked.multiply(ee.Image.pixelArea())
-    # Sum the area of clear pixels (unmasked in cloud band, equals 1)
-    statsClear = areaImage.reduceRegions(ee.FeatureCollection(ee.Geometry(g['geometry'])),ee.Reducer.sum(),30)
-
-    #print('stats', statsCloudy.merge(statsClear))
-    prefix='clouds'
-    results = ee.FeatureCollection(statsCloudy.merge(statsClear))
-    tag = g['properties']['state_abbr']
-    task=ee.batch.Export.table.toDrive(results, prefix+tag)
-    task.start()
-
-# for the entire imagecollection, get the pct of remaining cloud masked pixels 
-def buildCloudPct(cloudCollection):
-  #var cloudCollection = collection.select('clouds')
-  cloudMin = cloudCollection.max()
-  exportStats(cloudCollection.max(), cloudCollection.geometry())
+  return image.updateMask(mask).divide (10000).select("B[0-9]*").addBands(qa).addBands(image.select('system:time_start')).copyProperties(image, ['system:time_start'])
 
 # used in client-side export of state products
 def getGeometry(feature):
@@ -119,49 +95,8 @@ def maskLandsatClouds(image):
   mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0).And(qa.bitwiseAnd(cloudsBitMask).eq(0))
 
   # Return the masked image, scaled to TOA reflectance, without the QA bands.
-  return image.updateMask(mask).divide (10000).select("B[0-9]*").addBands(qa).copyProperties(image, ["system:time_start"])
-      
-# used to identify cloudy nd clear pixels in raw (unmasked) scenes
-def addCloudBand(image):
-  # Bits 3 and 5 are cloud shadow and cloud, respectively.
-  cloudShadowBitMask = 1 << 3
-  cloudsBitMask = 1 << 5
+  return image.updateMask(mask).divide (10000).select("B[0-9]*").addBands(qa).addBands(image.select('system:time_start')).copyProperties(image, ['system:time_start'])
 
-  # Get the pixel QA band.
-  qa = image.select('pixel_qa')
-  mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0).And(qa.bitwiseAnd(cloudsBitMask).eq(0))
-  return image.addBands(mask.select(['pixel_qa'],['clouds']))
-
-# supply cloud masked percentage of scenes used
-def exportStats (clouds, geom):
-  masked=clouds.select('clouds').Not()
-  unmasked=clouds.mask()
-  
-  # Sum the area of clear pixels (unmasked in cloud band, equals 1)
-  geometries=states.map(getGeometry).getInfo().get('features')
-  #geometries=states.filter(ee.Filter.eq('name', 'North Carolina')).map(getGeometry).getInfo().get('features')
-  # loop on client side
-  for g in geometries:
-    #args={'collection': ee.FeatureCollection(ee.Geometry(g['geometry'])),'reducer': ee.Reducer.sum(),'scale': 30, 'tileScale': 8}
-    areaImage = masked.multiply(ee.Image.pixelArea())
-    # Sum the area of cloudy pixels (masked in cloud band not, equals 1)
-    statsCloudy = areaImage.reduceRegions(ee.FeatureCollection(ee.Geometry(g['geometry'])),ee.Reducer.sum(),30)
-    areaImage = unmasked.multiply(ee.Image.pixelArea())
-    # Sum the area of clear pixels (unmasked in cloud band, equals 1)
-    statsClear = areaImage.reduceRegions(ee.FeatureCollection(ee.Geometry(g['geometry'])),ee.Reducer.sum(),30)
-
-    #print('stats', statsCloudy.merge(statsClear))
-    prefix='clouds'
-    results = ee.FeatureCollection(statsCloudy.merge(statsClear))
-    tag = g['properties']['state_abbr']
-    task=ee.batch.Export.table.toDrive(results, prefix+tag)
-    task.start()
-
-# for the entire imagecollection, get the pct of remaining cloud masked pixels 
-def buildCloudPct(cloudCollection):
-  #var cloudCollection = collection.select('clouds')
-  cloudMin = cloudCollection.max()
-  exportStats(cloudCollection.max(), cloudCollection.geometry())
 # use gee normalizedDifference
 def normDiff(image, band1, band2):
   return image.normalizedDifference([band1, band2])
@@ -176,7 +111,7 @@ def make255(image, band):
 # use gee normalizedDifference to get change in two filtered datasets
 def normDiffChange(compositeYearOne, compositeYearTwo, band1, band2):
   yearOneNormDiff = compositeYearOne.normalizedDifference([band1, band2]) 
-  yearTwoNormDiff = compositeYearTwo.normalizedDifference([band1, band2])  
+  yearTwoNormDiff = compositeYearTwo.normalizedDifference([band1, band2]) 
   changeYearOneYearTwo = yearTwoNormDiff.subtract(yearOneNormDiff)
   YearTwoABS = yearOneNormDiff.abs()
   YearOneYearTwoDivide = changeYearOneYearTwo.divide(YearTwoABS)
@@ -192,19 +127,16 @@ def oneBandDiff(compositeYearOne, compositeYearTwo, band1):
   changeYearOneYearTwo = yearTwoImg.subtract(yearOneImg)
   yearOneImgABS = yearOneImg.abs()
   YearOneYearTwoDivide = changeYearOneYearTwo.divide(yearOneImgABS)
-  YearOneYearTwoPercent = YearOneYearTwoDivide.multiply(100) 
+  YearOneYearTwoPercent = YearOneYearTwoDivide.multiply(100)
   image255 = make255(YearOneYearTwoPercent, band1)
   return image255
 
 # exports image to Google Drive
 def exportGeoTiff(image, exportName):
-  #print(states.aggregate_array('state_abbr'))
   geometries=states.map(getGeometry).getInfo().get('features')
-  #geometries=states.filter(ee.Filter.eq('name', 'North Carolina')).map(getGeometry).getInfo().get('features')
   # loop on client side
   #https://gis.stackexchange.com/questions/326131/error-in-export-image-from-google-earth-engine-from-python-api
   for geom in geometries:
-    print ('geometries', geom['properties']['state_abbr'])
     task_config={'image':image,
                'region':ee.Geometry(geometry).intersection(ee.Feature(geom).geometry(),1).bounds().getInfo()['coordinates'],
                'description':exportName+geom['properties']['state_abbr'],
@@ -214,8 +146,24 @@ def exportGeoTiff(image, exportName):
     task = ee.batch.Export.image.toDrive(**task_config)
     task.start()
     ids_file.write(',{0}'.format(task.id))
-	
-sgsf = ee.FeatureCollection("users/landsatfact/SGSF")
+    print ('task ID', task.id, geom['properties']['state_abbr'])
+
+# exports image to Asset
+def exportGeoTiffToAsset(image, exportName):
+    task_config={'image':image,
+               'region':geometry,
+               'description':exportName,
+               'scale':30,
+               'maxPixels':1e13,
+               'assetId': 'users/'+USERNAME+'/' + exportName}
+    task = ee.batch.Export.image.toAsset(**task_config)
+    task.start()
+    metadata_ids_file.write(', {0}'.format(task.id))
+    print ('task ID', task.id)
+
+def sceneFeatures(scene):
+  return ee.Feature(geometry, {'value': scene})
+ 
 states = ee.FeatureCollection("users/landsatfact/SGSF_states")
 	
 
@@ -256,6 +204,7 @@ if landsat_sat=='L8':
     swir2 = 'B7'
     LANDSAT = LANDSAT8
     mask = maskLandsatClouds
+    dateID = 'LANDSAT_ID'
 elif landsat_sat=='S2':
     nir = 'B8'
     red = 'B4'
@@ -265,21 +214,33 @@ elif landsat_sat=='S2':
     swir2 = 'B12'
     LANDSAT = Sentinel2
     mask = maskS2Clouds
-
+    dateID = 'DATATAKE_IDENTIFIER'
 
 # Collect one year of changes over the start and second years, for a date range  
 # from the beginning of secondYear winter in secondYear - 1 to end of startYear winter in startYear + 1
-collectionRangeStart = ee.ImageCollection(LANDSAT).filter(ee.Filter.date(secondYear + beginDay, startYear + endDay))
-#print('collectionRangeStart', collectionRangeStart.limit(50))
-
-#buildCloudPct(collectionRangeStart.map(addCloudBand).select('clouds'))
-collectionRangeEnd = ee.ImageCollection(LANDSAT).filter(ee.Filter.date(startYear + beginDay, endWinter + endDay))
+collectionRangeStart = ee.ImageCollection(LANDSAT).filter(ee.Filter.date(secondYear + beginDay, startYear + endDay)).map(addDateBand)
+collectionRangeEnd = ee.ImageCollection(LANDSAT).filter(ee.Filter.date(startYear + beginDay, endWinter + endDay)).map(addDateBand)
+compositeRangeEnd = collectionRangeEnd.map(mask).median()
+#pdb.set_trace()
+ag_array=collectionRangeStart.filterBounds(geometry).distinct(dateID).aggregate_array(dateID)
+fc = ee.FeatureCollection(ag_array.map(sceneFeatures))
+task_config={'collection': fc, 'description': 'scenesBegin',
+               'assetId': 'users/'+USERNAME+'/scenesBegin'}	
+task = ee.batch.Export.table.toAsset(**task_config)
+task.start()
+metadata_ids_file.write(',{0}'.format(task.id))
+ag_array=collectionRangeEnd.filterBounds(geometry).distinct(dateID).aggregate_array(dateID)
+fc = ee.FeatureCollection(ag_array.map(sceneFeatures))
+task_config={'collection': fc, 'description': 'scenesEnd',
+               'assetId': 'users/'+USERNAME+'/scenesEnd'}	
+task = ee.batch.Export.table.toAsset(**task_config)
+task.start()
+metadata_ids_file.write(',{0}'.format(task.id))
 
 compositeRangeStart = collectionRangeStart.map(mask).median()
 compositeRangeEnd = collectionRangeEnd.map(mask).median()
 
 compositeStartYear = compositeRangeEnd # Start Year average - "custom request"
-
 compositeSecondYear = compositeRangeStart # Second Year average - "custom request"
 
 # add the NDWI band to the image so we can get water masks
@@ -305,84 +266,9 @@ NDVIChangeCustomRange = normDiffChange(compositeSecondYear, compositeStartYear, 
 # SWIR change
 SWIRChangeCustomRange = oneBandDiff(compositeSecondYear,compositeStartYear, swir2)
 
-NDMI_SLD = ('<RasterSymbolizer>' 
-                        '<ColorMap>' 
-                            '<ColorMapEntry color="#d62f27" label="0" opacity="1.0" quantity="0"/>' 
-                            '<ColorMapEntry color="#e05138" label="7" opacity="1.0" quantity="7"/>' 
-                            '<ColorMapEntry color="#eb6f4d" label="27" opacity="1.0" quantity="27"/>' 
-                            '<ColorMapEntry color="#f28e63" label="47" opacity="1.0" quantity="47"/>' 
-                            '<ColorMapEntry color="#faaf7d" label="67" opacity="1.0" quantity="67"/>' 
-                            '<ColorMapEntry color="#fcce95" label="87" opacity="1.0" quantity="87"/>' 
-                            '<ColorMapEntry color="#fff0b3" label="107" opacity="1.0" quantity="107"/>' 
-                            '<ColorMapEntry color="#f0f2bf" label="127" opacity="1.0" quantity="127"/>' 
-                            '<ColorMapEntry color="#d3dbbf" label="147" opacity="1.0" quantity="147"/>' 
-                            '<ColorMapEntry color="#b7c4bd" label="167" opacity="1.0" quantity="167"/>' 
-                            '<ColorMapEntry color="#9bafbd" label="187" opacity="1.0" quantity="187"/>' 
-                            '<ColorMapEntry color="#7f9aba" label="207" opacity="1.0" quantity="207"/>' 
-                            '<ColorMapEntry color="#6388b8" label="227" opacity="1.0" quantity="227"/>' 
-                            '<ColorMapEntry color="#4575b5" label="247" opacity="1.0" quantity="247"/>' 
-                        '</ColorMap>' 
-                    '</RasterSymbolizer>')
-                    
-NDVI_SLD = ('<RasterSymbolizer>' 
-                        '<ColorMap>' 
-                            '<ColorMapEntry color="#ff2200" label="0" opacity="1.0" quantity="0"/>' 
-                            '<ColorMapEntry color="#ff5100" label="7" opacity="1.0" quantity="7"/>' 
-                            '<ColorMapEntry color="#ff7300" label="27" opacity="1.0" quantity="27"/>' 
-                            '<ColorMapEntry color="#ff9100" label="47" opacity="1.0" quantity="47"/>' 
-                            '<ColorMapEntry color="#ffb300" label="67" opacity="1.0" quantity="67"/>' 
-                            '<ColorMapEntry color="#ffd000" label="87" opacity="1.0" quantity="87"/>' 
-                            '<ColorMapEntry color="#fff200" label="107" opacity="1.0" quantity="107"/>' 
-                            '<ColorMapEntry color="#e8f000" label="127" opacity="1.0" quantity="127"/>' 
-                            '<ColorMapEntry color="#bdd600" label="147" opacity="1.0" quantity="147"/>' 
-                            '<ColorMapEntry color="#97bd00" label="167" opacity="1.0" quantity="167"/>' 
-                            '<ColorMapEntry color="#70a300" label="187" opacity="1.0" quantity="187"/>' 
-                            '<ColorMapEntry color="#4d8c00" label="207" opacity="1.0" quantity="207"/>' 
-                            '<ColorMapEntry color="#2d7500" label="227" opacity="1.0" quantity="227"/>' 
-                            '<ColorMapEntry color="#006100" label="247" opacity="1.0" quantity="247"/>' 
-                        '</ColorMap>' 
-                    '</RasterSymbolizer>')
-
-SWIR_SLD = ('<RasterSymbolizer>' 
-                        '<ColorMap>' 
-                            '<ColorMapEntry color="#00003c" label="0" opacity="1.0" quantity="0"/>' 
-                            '<ColorMapEntry color="#000059" label="7" opacity="1.0" quantity="7"/>' 
-                            '<ColorMapEntry color="#000080" label="27" opacity="1.0" quantity="27"/>' 
-                            '<ColorMapEntry color="#0000e8" label="47" opacity="1.0" quantity="47"/>' 
-                            '<ColorMapEntry color="#0080ff" label="67" opacity="1.0" quantity="67"/>' 
-                            '<ColorMapEntry color="#00c080" label="87" opacity="1.0" quantity="87"/>' 
-                            '<ColorMapEntry color="#01ff00" label="107" opacity="1.0" quantity="107"/>' 
-                            '<ColorMapEntry color="#c0ff00" label="127" opacity="1.0" quantity="127"/>' 
-                            '<ColorMapEntry color="#ffff00" label="147" opacity="1.0" quantity="147"/>' 
-                            '<ColorMapEntry color="#ffc100" label="167" opacity="1.0" quantity="167"/>' 
-                            '<ColorMapEntry color="#ff8000" label="187" opacity="1.0" quantity="187"/>' 
-                            '<ColorMapEntry color="#ff0000" label="207" opacity="1.0" quantity="207"/>' 
-                            '<ColorMapEntry color="#a30000" label="227" opacity="1.0" quantity="227"/>' 
-                            '<ColorMapEntry color="#590004" label="247" opacity="1.0" quantity="247"/>' 
-                        '</ColorMap>' 
-                    '</RasterSymbolizer>')
-                    
-
-                    
-SWIR_THRESHOLD_SLD = ('<RasterSymbolizer>' 
-                        '<ColorMap>' 
-                            '<ColorMapEntry color="#ff8000" label="186" opacity="0.0" quantity="186"/>' 
-                            '<ColorMapEntry color="#ff8000" label="187" opacity="1.0" quantity="187"/>' 
-                            '<ColorMapEntry color="#ff0000" label="207" opacity="1.0" quantity="207"/>' 
-                            '<ColorMapEntry color="#a30000" label="227" opacity="1.0" quantity="227"/>' 
-                            '<ColorMapEntry color="#590004" label="247" opacity="1.0" quantity="247"/>' 
-                        '</ColorMap>' 
-                    '</RasterSymbolizer>')
-
-
-#exportGeoTiff(RGBStartYear, 'RGB'+ startYear)
-#exportGeoTiff(RGBSecondYear, 'RGB'+ secondYear)
-
-#exportGeoTiff(NDVIChangeCustomRange, 'NDVI-Custom-Range-Change-Between-'+startYear+'-and-'+secondYear)
-
-#exportGeoTiff(SWIRChangeCustomRange.sldStyle(SWIR_THRESHOLD_SLD), 'SWIR-Custom-Range-Change-Between-'+startYear+'-and-'+secondYear)
 exportGeoTiff(SWIRChangeCustomRange, 'SWIR-Custom-Change-Between-'+startYear+'-and-'+secondYear)
+exportGeoTiffToAsset(compositeStartYear.select(['system:time_start'], ['observationDate']), 'datesBegin'+ str(startYear))
+exportGeoTiffToAsset(compositeSecondYear.select(['system:time_start'], ['observationDate']), 'datesEnd'+ str(startYear))
 
 
-#exportGeoTiff(NDMIChangeCustomRange, 'NDMI-Custom-Range-Change-Between-'+startYear+'-and-'+secondYear)
 

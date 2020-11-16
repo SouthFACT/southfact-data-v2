@@ -1,4 +1,5 @@
 import ee, time, datetime, argparse, pdb
+from userConfig import USERNAME
 
 def parseCmdLine():
     # Will parse the arguments provided on the command line.
@@ -109,7 +110,6 @@ def exportGeoTiff(image, exportName):
     task_config={'image':image,
                'region':ee.Geometry(geometry).intersection(ee.Feature(geom).geometry(),1).bounds().getInfo()['coordinates'],
                'description':exportName+geom['properties']['state_abbr'],
-               'folder': 'users/landsatfact/LatestChangeProducts/',
                'scale':30,
                'maxPixels':1e13,
                'formatOptions': {'cloudOptimized': True}}
@@ -118,41 +118,22 @@ def exportGeoTiff(image, exportName):
     ids_file.write(',{0}'.format(task.id))
     print ('task ID', task.id, geom['properties']['state_abbr'])
     
-# exports image to Google Drive
+# exports image to Asset
 def exportGeoTiffToAsset(image, exportName):
-  geometries=states.map(getGeometry).getInfo().get('features')
-  # loop on client side
-  for geom in geometries:
     task_config={'image':image,
-               'region':ee.Geometry(geometry).intersection(ee.Feature(geom).geometry(),1).bounds().getInfo()['coordinates'],
-               'description':exportName+geom['properties']['state_abbr'],
+               'region':geometry,
+               'description':exportName,
                'scale':30,
                'maxPixels':1e13,
-               'assetId': exportName+geom['properties']['state_abbr']}
+               'assetId': 'users/'+USERNAME+'/' + exportName}
     task = ee.batch.Export.image.toAsset(**task_config)
     task.start()
-    #ids_file.write(', {0}'.format(task.id))
-    print ('task ID', task.id, geom['properties']['state_abbr'])
-
-
-# exports image clear pixel percentage (clear pixel area and total state area in square meters) to Google Drive
-def exportCloudTable(image, exportName):
-  geometries=states.map(getGeometry).getInfo().get('features')
-  bandName = image.bandNames().get(0);
-  # loop on client side
-  for geom in geometries:
-    stateSQM = geom['properties']['sq_miles']*2589988
-    npix = image.select(0).multiply(0).add(1).unmask(0).multiply(ee.Image.pixelArea())
-    npix=npix.reduceRegion(reducer= ee.Reducer.sum(), geometry= ee.Feature(geom).geometry(), scale= 30, maxPixels= 1e9).get(bandName)
-    features = [ee.Feature(None, {'area': npix}),ee.Feature(None, {'area': stateSQM})]  
-    task_config={'collection': ee.FeatureCollection(features), 'description': 'clearPercentage'+geom['properties']['state_abbr']}
-	#https://gis.stackexchange.com/questions/326131/error-in-export-image-from-google-earth-engine-from-python-api
-    task = ee.batch.Export.table.toDrive(**task_config)
-    task.start()   
-
+    metadata_ids_file.write(', {0}'.format(task.id))
+    print ('task ID', task.id)
+    
 def sceneFeatures(scene):
-  return ee.Feature(None, {'value': scene})
-
+  return ee.Feature(geometry, {'value': scene})
+  
 ee.Initialize()
 ids_file, metadata_ids_file = parseCmdLine() 
 ids_file = open(ids_file, "w")
@@ -212,7 +193,7 @@ mask = maskLandsatClouds
 dateID = 'LANDSAT_ID'
 
 states = ee.FeatureCollection("users/landsatfact/SGSF_states")
-geometry = states.geometry(1).simplify(1000)
+geometry = states.geometry().bounds()
 # Collect one year of changes over the start and second years, for a date range  
 # from the beginning of secondYear winter in secondYear - 1 to end of startYear winter in startYear + 1
 # early in the year (before 3/31) use at least 30 days of data 
@@ -220,19 +201,22 @@ geometry = states.geometry(1).simplify(1000)
 # later in the year restrict this range to the end of winter (3/31)
 collectionRangeStart = ee.ImageCollection(LANDSAT).filterDate(lastWinterBeginDate,t2.advance(-30,'day')).filterDate(lastWinterBeginDate, lastWinterEndDate).map(addDateBand)
 collectionRangeEnd = ee.ImageCollection(LANDSAT).filterDate(curentYearBeginDate, endWinterDate).map(addDateBand)
-"""
-ag_array=collectionRangeStart.aggregate_array(dateID)
-fc = ee.FeatureCollection(ag_array.map(sceneFeatures))
-task_config={'collection': fc.filterBounds(geometry), 'description': 'scenesBegin', 'assetId': 'users/landsatfact/scenesBegin'}	
-task = ee.batch.Export.table.toAsset(**task_config)
-task.start()
 
-ag_array=collectionRangeEnd.aggregate_array(dateID)
+ag_array=collectionRangeStart.filterBounds(geometry).distinct(dateID).aggregate_array(dateID)
 fc = ee.FeatureCollection(ag_array.map(sceneFeatures))
-task_config={'collection': fc.filterBounds(geometry), 'description': 'scenesEnd', 'assetId': 'users/landsatfact/scenesEnd'}	
+task_config={'collection': fc, 'description': 'scenesBegin',
+               'assetId': 'users/'+USERNAME+'/scenesBegin'}	
 task = ee.batch.Export.table.toAsset(**task_config)
 task.start()
-"""
+metadata_ids_file.write(',{0}'.format(task.id))
+ag_array=collectionRangeEnd.filterBounds(geometry).distinct(dateID).aggregate_array(dateID)
+fc = ee.FeatureCollection(ag_array.map(sceneFeatures))
+task_config={'collection': fc, 'description': 'scenesEnd',
+               'assetId': 'users/'+USERNAME+'/scenesEnd'}	
+task = ee.batch.Export.table.toAsset(**task_config)
+task.start()
+metadata_ids_file.write(',{0}'.format(task.id))
+
 compositeRangeStart = collectionRangeStart.map(mask).median()
 compositeRangeEnd = collectionRangeEnd.map(mask).median()
 
@@ -270,7 +254,8 @@ exportGeoTiff(SWIRChangeCustomRange, 'SWIR-Latest-Change-Between-'+str(startYear
 exportGeoTiff(NDMIChangeCustomRange, 'NDMI-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear))
 
 #export datetimes used for pixel values in one year of changes over the start and second years
-#exportGeoTiffToAsset(compositeStartYear.select(['system:time_start'], ['observationDate']), 'datesBegin'+ str(startYear))
-#exportGeoTiffToAsset(compositeSecondYear.select(['system:time_start'], ['observationDate']), 'datesEnd'+ str(startYear))
+exportGeoTiffToAsset(compositeStartYear.select(['system:time_start'], ['observationDate']), 'datesBegin'+ str(startYear))
+exportGeoTiffToAsset(compositeSecondYear.select(['system:time_start'], ['observationDate']), 'datesEnd'+ str(startYear))
 
 ids_file.close()
+metadata_ids_file.close()
