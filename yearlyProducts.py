@@ -19,49 +19,17 @@ def getGeometry(feature):
   # Return a new Feature, copying properties from the old Feature.
   return ee.Feature(geom).copyProperties(feature, keepProperties)
 
-# /**
-# * Function to mask clouds using the Sentinel-2 QA band
-# * @param {ee.Image} image Sentinel-2 image
-# * @return {ee.Image} cloud masked Sentinel-2 image
-# */
-def maskS2Clouds(image):
-  qa = image.select('QA60')
-
-  # Bits 10 and 11 are clouds and cirrus, respectively.
-  cloudBitMask = 1 << 10
-  cirrusBitMask = 1 << 11
-
-  # Both flags should be set to zero, indicating clear conditions.
-  mask = qa.bitwiseAnd(cloudBitMask).eq(0).And(qa.bitwiseAnd(cirrusBitMask).eq(0))
-
-  return image.updateMask(mask).divide(10000)
-
 # add band to identify unix time of every pixel used in the composite
 def addDateBand(image): 
   #.set('system:time_start', img.get('system:time_start'))
   return image.addBands(image.metadata('system:time_start')).copyProperties(image)
   
-# Function to cloud mask from the pixel_qa band of Landsat 8 SR data.
-def maskLandsatClouds(image):
-  # Bits 3 and 5 are cloud shadow and cloud, respectively.
-  cloudShadowBitMask = 1 << 3
-  cloudsBitMask = 1 << 5
-
-  # Get the pixel QA band.
-  qa = image.select('pixel_qa')
-
-  # Both flags should be set to zero, indicating clear conditions.
-  mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0).And(qa.bitwiseAnd(cloudsBitMask).eq(0))
-
-  # Return the masked image, scaled to TOA reflectance, without the QA bands.
-  return image.updateMask(mask).divide (10000).select("B[0-9]*").addBands(qa).addBands(image.select('system:time_start')).copyProperties(image, ['system:time_start'])
-
 # used in client-side export of state products
 def getGeometry(feature):
   # Keep this list of properties.
   keepProperties = ['state_abbr']
   # Get the centroid of the feature's geometry.
-  geom = feature.geometry().bounds()
+  geom = feature.geometry()
   # Return a new Feature, copying properties from the old Feature.
   return ee.Feature(geom).copyProperties(feature, keepProperties)
 
@@ -164,7 +132,7 @@ def exportGeoTiffToAsset(image, exportName):
 def sceneFeatures(scene):
   return ee.Feature(geometry, {'value': scene})
  
-states = ee.FeatureCollection("users/landsatfact/SGSF_states")
+states = ee.FeatureCollection("users/landsatfact/SubdividedStateBoundaries")
 	
 
 startYear, ids_file, metadata_ids_file = parseCmdLine() 
@@ -181,7 +149,7 @@ secondYear = str(int(startYear)-1)
 beginWinter = str(int(secondYear)-1)
 endWinter = str(int(startYear)+1)
 
-geometry = states.geometry(1).simplify(1000)
+geometry = states.geometry().bounds()
 
 # defaults
 LANDSAT = LANDSAT8
@@ -267,8 +235,8 @@ NDVIChangeCustomRange = normDiffChange(compositeSecondYear, compositeStartYear, 
 SWIRChangeCustomRange = oneBandDiff(compositeSecondYear,compositeStartYear, swir2)
 
 exportGeoTiff(SWIRChangeCustomRange, 'SWIR-Custom-Change-Between-'+startYear+'-and-'+secondYear)
-exportGeoTiffToAsset(compositeStartYear.select(['system:time_start'], ['observationDate']), 'datesBegin'+ str(startYear))
-exportGeoTiffToAsset(compositeSecondYear.select(['system:time_start'], ['observationDate']), 'datesEnd'+ str(startYear))
+exportGeoTiffToAsset(compositeStartYear.select(['system:time_start'], ['observationDate']), 'datesBegin')
+exportGeoTiffToAsset(compositeSecondYear.select(['system:time_start'], ['observationDate']), 'datesEnd')
 
 
 
