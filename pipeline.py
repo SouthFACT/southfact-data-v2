@@ -1,4 +1,8 @@
 from __future__ import print_function
+import logging
+import boto3
+from botocore.exceptions import ClientError
+from os import listdir
 import pickle
 import os.path
 from googleapiclient.discovery import build
@@ -17,6 +21,7 @@ import ee
 import subprocess, datetime, os, pdb
 from osgeo import gdal
 from os.path import isfile, join
+from userConfig import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 
 def parseCmdLine():
     # Will parse the arguments provided on the command line.
@@ -29,12 +34,31 @@ def parseCmdLine():
     ns = parser.parse_args()
     return [ns.downloadDir, ns.outputGeoTIFFDir, ns.ids_file, ns.drive_key_file, ns.credentials_file]
 
+#Upload a file to an S3 bucket
+#:param file_name: File to upload
+#:param bucket: Bucket to upload to
+#:param object_name: S3 object name. If not specified then file_name is used
+#:return: True if file was uploaded, else False
+def upload_file(file_name, bucket, object_name=None):
+ 
+    # If S3 object_name was not specified, use file_name
+    if object_name is None:
+        object_name = file_name
+
+    # Upload the file
+    s3_client = boto3.client('s3',aws_access_key_id=AWS_ACCESS_KEY_ID,aws_secret_access_key=AWS_SECRET_ACCESS_KEY)
+    try:
+        response = s3_client.upload_file(file_name, bucket, object_name)
+    except ClientError as e:
+        logging.error(e)
+        return False
+    return True
+
 # Utility function to mosaic a list of rasters
 # @param
-#     [inRasterList] - a list of rasters
-#     [outRasterPath] - full path to the output raster
-# @return None
-# Example call: mosaic(reclassedTIFFs, 'mosaic.tif')
+#     [inRasterList] - a list of rasters 
+#     [outRasterPath] - full path to the output raster in epsg:5070 projection
+# @return errcode
 def mosaic(inRasterList, outRasterPath):
     codeIn = ['gdalwarp','-t_srs', 'EPSG:5070'] + inRasterList + [outRasterPath]
     process = subprocess.Popen(codeIn,stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -44,6 +68,11 @@ def mosaic(inRasterList, outRasterPath):
     # non-zero is error
     return errcode
 
+# Utility function to convert a TIFF to GeoTIFF
+# @param
+#     [inRaster] - a list of rasters
+#     [outRasterPath] - full path to the output GeoTIFF
+# @return errcode
 def translateToGeoTIFF(inRaster, outRasterPath):
     """gdal_translate "D:/SouthFACT_products/latestChange/062320\latestChangeSWIR.tif" "H:\SPA_Secure\Geospatial\SouthFACT\GIS\LatestChange\geotiff\out.tif" -co TILED=YES -co COPY_SRC_OVERVIEWS=YES -co COMPRESS=DEFLATEgdal_translate "D:/SouthFACT_products/latestChange/062320\latestChangeNDVI.tif" "D:/SouthFACT_products/latestChange/062320/out.tif" -co TILED=YES -co COPY_SRC_OVERVIEWS=YES -co COMPRESS=DEFLATE  -co BIGTIFF=YES"""
     codeIn = ['gdal_translate',inRaster,outRasterPath, '-co',  'TILED=YES', '-co', 'COPY_SRC_OVERVIEWS=YES', '-co', 'COMPRESS=DEFLATE', '-co', 'BIGTIFF=YES']
@@ -98,13 +127,10 @@ def completedTasksRemaining(ids):
 # If modifying these scopes, delete the file token.pickle.
 SCOPES = ['https://www.googleapis.com/auth/drive']
 def main():
-    """Using the Drive v3 API to download products from GEE for regioanl GeoTIFF.
-    """
-
+    """Using the Drive v3 API to download products from GEE for regioanl GeoTIFF."""
     downloadDir, outputGeoTIFFDir, ids_file, drive_key_file, credentials_file = parseCmdLine() 
     successfulDownloads = 0 
     creds = None
-    #pdb.set_trace()
     # The file token.pickle stores the user's access and refresh tokens, and is
     # created automatically when the authorization flow completes for the first
     # time.
@@ -160,7 +186,7 @@ def main():
     p = re.compile('NDMI(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(PR|VI)')  
     onlyfiles = [f for f in os.listdir(downloadDir) if isfile(join(downloadDir, f))]    
     mosaic([s for s in onlyfiles if p.match(s)], downloadDir+'ndmiLatestChange.tif')
-    translateToGeoTIFF(downloadDir+'ndmiLatestChange.tif', outputGeoTIFFDir+'ndmiLatestChange.PRVItif')
+    translateToGeoTIFF(downloadDir+'ndmiLatestChange.tif', outputGeoTIFFDir+'ndmiLatestChangePRVI.tif')
     p = re.compile('NDVI(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(LA|AR|MS|KY|TN|OK|VA|SC|NC|GA|AL|TX|FL)')  
     onlyfiles = [f for f in os.listdir(downloadDir) if isfile(join(downloadDir, f))]    
     mosaic([s for s in onlyfiles if p.match(s)], downloadDir+'ndviLatestChange.tif')
@@ -170,6 +196,10 @@ def main():
     onlyfiles = [f for f in os.listdir(downloadDir) if isfile(join(downloadDir, f))]    
     mosaic([s for s in onlyfiles if p.match(s)], downloadDir+'ndviLatestChange.tif')
     translateToGeoTIFF(downloadDir+'ndviLatestChange.tif', outputGeoTIFFDir+'ndviLatestChangePRVI.tif')
+    onlyfiles = [f for f in os.listdir(outputGeoTIFFDir) if isfile(join(outputGeoTIFFDir, f))]    
+    #pdb.set_trace()
+    for file in onlyfiles:
+        upload_file(outputGeoTIFFDir+file, "data.southfact.com", 'current-year-to-date/'+file)
     print ('Finished at {0}'.format(datetime.datetime.now().strftime("%a, %d %B %Y %I:%M:%S")))
 
 if __name__ == '__main__':
