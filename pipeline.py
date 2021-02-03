@@ -21,18 +21,18 @@ import ee
 import subprocess, datetime, os, pdb
 from osgeo import gdal
 from os.path import isfile, join
-from userConfig import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+from userConfig import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, downloadDir, outputGeoTIFFDir, ids_file, drive_key_file, credentials_file
 
 def parseCmdLine():
     # Will parse the arguments provided on the command line.
-    parser = argparse.ArgumentParser(description='Download GEE products and create regional GeoTIFF')
-    parser.add_argument('downloadDir', help='download directory e.g., C:/Users/smith/Downloads/ ')
-    parser.add_argument('outputGeoTIFFDir', help='GeoTIFF directory e.g., G:/latestChange/')
-    parser.add_argument('ids_file', help='the fullpath where export to Drive task ids are stored e.g., G:/productTranscript.txt')
-    parser.add_argument('drive_key_file', help='the fullpath of the token.pickle file e.g., G:/keys/token.pickle')
-    parser.add_argument('credentials_file', help='the fullpath of the credentials file e.g., C:/Users/smith/credentials.json')    
+    parser = argparse.ArgumentParser(description='Download GEE products and create regional GeoTIFF')    
+    parser.add_argument('-yearly',help="pipeline for yearly change products. Default is for latest change.", action='store_true')
+    parser.add_argument('-year',help="in pipeline for yearly change products, the most recent year being processed. e.g., 2019")
+    parser.add_argument('-bucket',help="in pipeline for yearly change products, the S3 bucket destination. e.g., 2019-2018/")
     ns = parser.parse_args()
-    return [ns.downloadDir, ns.outputGeoTIFFDir, ns.ids_file, ns.drive_key_file, ns.credentials_file]
+    if ('yearly' in vars(ns) and 'year' not in vars(ns) and 'bucket' not in vars(ns)):
+        parser.error('The -yearly argument requires the -year and -bucket arguments')
+    return [ns.yearly, ns.year, ns.bucket]
 
 #Upload a file to an S3 bucket
 #:param file_name: File to upload
@@ -87,7 +87,7 @@ def download(filename, fileId, service):
     # download to disk and remove from drive
     print(filename)    
     request = service.files().get_media(fileId=fileId)
-    fh = io.FileIO(os.path.expandvars('%userprofile%/Downloads/' + filename), 'wb')
+    fh = io.FileIO(os.path.expandvars(downloadDir + filename), 'wb')
     downloader = MediaIoBaseDownload(fh, request)
     done = False
     while done is False:
@@ -96,17 +96,17 @@ def download(filename, fileId, service):
     file = service.files().delete(fileId=fileId).execute()
 
 def downloadMultiple(aListOfDicts, service):
-    count=0
+    downloadedFiles=[]
     # download any available yearly or latest change products
-    p = re.compile('(NDVI|SWIR|NDMI)(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(LA|AR|MS|KY|TN|OK|VA|SC|NC|GA|AL|TX|FL|PR|VI)')           
+    p = re.compile('(NDVI|SWIR|NDMI)(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}\w*(L8|S2)')           
     for d in aListOfDicts:
         i=d['id']
         n=d['name']
         #print(i,n)
         if p.match(n):
             download(n,i, service)
-            count += 1
-    return count
+            downloadedFiles.append(n)
+    return downloadedFiles
     
 def pendingTasks(ids):
     tasks = ee.data.getTaskList() 
@@ -124,11 +124,23 @@ def completedTasksRemaining(ids):
     print('completed tasks: {0}'.format(outstandingCompletedTasks))
     return outstandingCompletedTasks<len(ids)
     
+def mosaicDownloadedToGeotiff(p,mosaicTiffName):
+    onlyfiles = [f for f in os.listdir(downloadDir) if isfile(join(downloadDir, f))]    
+    mosaic([s for s in onlyfiles if p.match(s)], downloadDir+mosaicTiffName)
+    translateToGeoTIFF(downloadDir+mosaicTiffName, outputGeoTIFFDir+mosaicTiffName)
+   
+    
 # If modifying these scopes, delete the file token.pickle.
 SCOPES = ['https://www.googleapis.com/auth/drive']
 def main():
     """Using the Drive v3 API to download products from GEE for regioanl GeoTIFF."""
-    downloadDir, outputGeoTIFFDir, ids_file, drive_key_file, credentials_file = parseCmdLine() 
+    yearly, year, bucket = parseCmdLine()   
+    if yearly: 
+        productName = 'YearlyChange' + year
+        bucketName = bucket
+    else:
+        productName = 'LatestChange'
+        bucketName = 'current-year-to-date/'
     successfulDownloads = 0 
     creds = None
     # The file token.pickle stores the user's access and refresh tokens, and is
@@ -153,54 +165,52 @@ def main():
     text_file = open(ids_file, "r")
     ids = text_file.read().split(',')
     ids = list(filter(None, ids))
-    #pdb.set_trace()
+    tasks = ee.data.getTaskList() 
+    myTasks = list(filter(lambda x: x['id'] in ids, tasks))     
     print('Begin download at {0}'.format(datetime.datetime.now().strftime("%a, %d %B %Y %I:%M:%S")))
     while True:
-        results = service.files().list(pageSize=50, fields="nextPageToken, files(id, name)").execute()
+        results = service.files().list(pageSize=100, q="mimeType = 'image/tiff'", fields="nextPageToken, files(id, name)").execute()      
         # get the specifics of the items on drive for download 
         items = results.get('files', [])
         # get any completed tasks and download them
-        successfulDownloads += downloadMultiple(items,service)
-        print("Waiting for exports to complete.")
-        time.sleep(15*60) # Delay for 15 minutes.
+        successfulDownloads = len(downloadMultiple(items,service))
         # if there's nothing let to do, quit
-        if not (pendingTasks(ids) or completedTasksRemaining(ids) or successfulDownloads < len(ids)):
+        if not (pendingTasks(ids) or completedTasksRemaining(ids) or successfulDownloads):
             break
-    # Mainland Southern states mosaic
+        else:
+            print("Waiting for exports to complete.")
+            time.sleep(5*60) # Delay for 5 minutes.
+    # find IDs for the scenesBegin and scenesEnd CSVs
+    #results = service.files().list(pageSize=100, q="name = 'SWIR-Custom-Change-Between-2020-and-2019scenesBegin.csv' or name = 'SWIR-Custom-Change-Between-2020-and-2019scenesEnd.csv'", fields="nextPageToken, files(id, name)").execute()
+    #pdb.set_trace()    
+    results = service.files().list(pageSize=100, q="mimeType != 'image/tiff' and name contains 'SWIR-Custom-Change-Between*'", fields="nextPageToken, files(id, name)").execute()
+    # get the fileIDs of the items download 
+    items = results.get('files', [])
+    # get CSVs and download them
+    downloadedFiles = downloadMultiple(items,service)
+    successfulDownloads=len(downloadedFiles)
+    p=re.compile('(NDVI|SWIR|NDMI)(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}\w*(L8|S2)')
+    satelliteName = re.search(p,downloadedFiles[0]).group(3)
+    if successfulDownloads == 2:
+        upload_file(downloadDir+downloadedFiles[0], "data.southfact.com", bucketName+downloadedFiles[0])
+        upload_file(downloadDir+downloadedFiles[1], "data.southfact.com", bucketName+downloadedFiles[1])
+    # Mainland Southern states and PR VI mosaics
     print('Begin mosaic to geotiff at {0}'.format(datetime.datetime.now().strftime("%a, %d %B %Y %I:%M:%S")))
     os.chdir(downloadDir)
-    p = re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(LA|AR|MS|KY|TN|OK|VA|SC|NC|GA|AL|TX|FL)')  
-    onlyfiles = [f for f in os.listdir(downloadDir) if isfile(join(downloadDir, f))]    
-    mosaic([s for s in onlyfiles if p.match(s)], downloadDir+'swirLatestChange.tif')
-    translateToGeoTIFF(downloadDir+'swirLatestChange.tif', outputGeoTIFFDir+'swirLatestChange.tif')
-    # PR|VI SWIR mosaic
-    p = re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(PR|VI)')  
-    onlyfiles = [f for f in os.listdir(downloadDir) if isfile(join(downloadDir, f))]    
-    mosaic([s for s in onlyfiles if p.match(s)], downloadDir+'swirLatestChange.tif')
-    translateToGeoTIFF(downloadDir+'swirLatestChange.tif', outputGeoTIFFDir+'swirLatestChangePRVI.tif')
-    p = re.compile('NDMI(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(LA|AR|MS|KY|TN|OK|VA|SC|NC|GA|AL|TX|FL)')  
-    onlyfiles = [f for f in os.listdir(downloadDir) if isfile(join(downloadDir, f))]    
-    mosaic([s for s in onlyfiles if p.match(s)], downloadDir+'ndmiLatestChange.tif')
-    translateToGeoTIFF(downloadDir+'ndmiLatestChange.tif', outputGeoTIFFDir+'ndmiLatestChange.tif')
-    # PR|VI mosaic NDMI
-    p = re.compile('NDMI(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(PR|VI)')  
-    onlyfiles = [f for f in os.listdir(downloadDir) if isfile(join(downloadDir, f))]    
-    mosaic([s for s in onlyfiles if p.match(s)], downloadDir+'ndmiLatestChange.tif')
-    translateToGeoTIFF(downloadDir+'ndmiLatestChange.tif', outputGeoTIFFDir+'ndmiLatestChangePRVI.tif')
-    p = re.compile('NDVI(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(LA|AR|MS|KY|TN|OK|VA|SC|NC|GA|AL|TX|FL)')  
-    onlyfiles = [f for f in os.listdir(downloadDir) if isfile(join(downloadDir, f))]    
-    mosaic([s for s in onlyfiles if p.match(s)], downloadDir+'ndviLatestChange.tif')
-    translateToGeoTIFF(downloadDir+'ndviLatestChange.tif', outputGeoTIFFDir+'ndviLatestChange.tif')
-    # PR|VI NDVI mosaic
-    p = re.compile('NDVI(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(PR|VI)')  
-    onlyfiles = [f for f in os.listdir(downloadDir) if isfile(join(downloadDir, f))]    
-    mosaic([s for s in onlyfiles if p.match(s)], downloadDir+'ndviLatestChange.tif')
-    translateToGeoTIFF(downloadDir+'ndviLatestChange.tif', outputGeoTIFFDir+'ndviLatestChangePRVI.tif')
+    mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)(CONUS|PRVI)'), 'swir' + productName + satelliteName + 'CONUS.tif')
+    mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}datesBegin(L8|S2)CONUS'), 'swirdatesBegin' + productName + satelliteName + 'CONUS.tif')
+    mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}datesEnd(L8|S2)CONUS'), 'swirdatesEnd' + productName + satelliteName + 'CONUS.tif')
+    mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)PRVI'), 'swir' + productName + satelliteName + 'PRVI.tif')
+    mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}datesBegin(L8|S2)PRVI'), 'swirdatesBegin' + productName + satelliteName + 'PRVI.tif')
+    mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}datesEnd(L8|S2)PRVI'), 'swirdatesEnd' + productName + satelliteName + 'PRVI.tif')
+    if not yearly:
+        mosaicDownloadedToGeotiff(re.compile('NDMI(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)CONUS'), 'ndmi' + productName + satelliteName + 'CONUS.tif')  
+        mosaicDownloadedToGeotiff(re.compile('NDMI(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)PRVI'), 'ndmi' + productName + satelliteName + 'PRVI.tif')  
+        mosaicDownloadedToGeotiff(re.compile('NDVI(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)CONUS'),'ndvi' + productName + satelliteName + 'CONUS.tif')  
+        mosaicDownloadedToGeotiff(re.compile('NDVI(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)PRVI'), 'ndvi' + productName + satelliteName + 'PRVI.tif')  
     onlyfiles = [f for f in os.listdir(outputGeoTIFFDir) if isfile(join(outputGeoTIFFDir, f))]    
-    #pdb.set_trace()
     for file in onlyfiles:
-        upload_file(outputGeoTIFFDir+file, "data.southfact.com", 'current-year-to-date/'+file)
+        upload_file(outputGeoTIFFDir+file, "data.southfact.com", bucketName+file)
     print ('Finished at {0}'.format(datetime.datetime.now().strftime("%a, %d %B %Y %I:%M:%S")))
-
 if __name__ == '__main__':
     main()
