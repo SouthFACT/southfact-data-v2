@@ -138,9 +138,11 @@ def main():
     if yearly: 
         productName = 'YearlyChange' + year
         bucketName = bucket
+        csvString = "\'SWIR-Custom-Change-Between-*\'"
     else:
         productName = 'LatestChange'
         bucketName = 'current-year-to-date/'
+        csvString = "\'SWIR-Latest-Change-Between-*\'"
     successfulDownloads = 0 
     creds = None
     # The file token.pickle stores the user's access and refresh tokens, and is
@@ -181,14 +183,14 @@ def main():
             print("Waiting for exports to complete.")
             time.sleep(5*60) # Delay for 5 minutes.
     # find IDs for the scenesBegin and scenesEnd CSVs
-    #results = service.files().list(pageSize=100, q="name = 'SWIR-Custom-Change-Between-2020-and-2019scenesBegin.csv' or name = 'SWIR-Custom-Change-Between-2020-and-2019scenesEnd.csv'", fields="nextPageToken, files(id, name)").execute()
-    #pdb.set_trace()    
-    results = service.files().list(pageSize=100, q="mimeType != 'image/tiff' and name contains 'SWIR-Custom-Change-Between*'", fields="nextPageToken, files(id, name)").execute()
+    queryStr="mimeType != 'image/tiff' and name contains "+csvString  
+    results = service.files().list(pageSize=100, q=queryStr, fields="nextPageToken, files(id, name)").execute()
     # get the fileIDs of the items download 
     items = results.get('files', [])
     # get CSVs and download them
     downloadedFiles = downloadMultiple(items,service)
     successfulDownloads=len(downloadedFiles)
+    #pdb.set_trace()  
     p=re.compile('(NDVI|SWIR|NDMI)(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}\w*(L8|S2)')
     satelliteName = re.search(p,downloadedFiles[0]).group(3)
     if successfulDownloads == 2:

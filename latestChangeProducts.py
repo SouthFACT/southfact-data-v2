@@ -1,14 +1,12 @@
 import ee, time, datetime, argparse, pdb
-from userConfig import USERNAME
+from userConfig import ids_file
 
 def parseCmdLine():
     # Will parse the arguments provided on the command line.
-    # download dir and output regional TIFF full path are mandatory.
-    parser = argparse.ArgumentParser(description='Generate GEE latest change products')
-    parser.add_argument('ids_file', help='the fullpath where export to Drive task ids will be stored e.g., G:/productTranscript.txt ')
-    parser.add_argument('metadata_ids_file', help='the fullpath where export to Asset task ids will be stored e.g., G:/productTranscript.txt ')
+    parser = argparse.ArgumentParser(description='Generate GEE latest change products.')
+    parser.add_argument('-S2',help="Sentinel-2 latest change products. Default is for Landsat 8 change.", action='store_true')    
     ns = parser.parse_args()
-    return [ns.ids_file, ns.metadata_ids_file]
+    return ns.S2
     
 # reference time.time
 # Return the current time in seconds since the Epoch.
@@ -18,17 +16,33 @@ def parseCmdLine():
 # conversion to an int prevents this
 def now_milliseconds():
    return int(time.time() * 1000)
+  
+def maskS2CloudsQA60(image):
+  qa = image.select('QA60')
 
+  # Bits 10 and 11 are clouds and cirrus, respectively.
+  cloudBitMask = 1 << 10
+  cirrusBitMask = 1 << 11
 
-# used in client-side export of state products
-def getGeometry(feature):
-  # Keep this list of properties.
-  keepProperties = ['state_abbr', 'sq_miles']
-  # Get the centroid of the feature's geometry.
-  geom = feature.geometry()
-  # Return a new Feature, copying properties from the old Feature.
-  return ee.Feature(geom).copyProperties(feature, keepProperties)
+  # Both flags should be set to zero, indicating clear conditions.
+  mask = qa.bitwiseAnd(cloudBitMask).eq(0).And(qa.bitwiseAnd(cirrusBitMask).eq(0))
+  return image.updateMask(mask)
 
+def maskEdges(s2_img) :
+  image=s2_img.updateMask(s2_img.select('B8A').mask().updateMask(s2_img.select('B9').mask()))
+  return image.addBands(s2_img.select('system:time_start')).copyProperties(s2_img, ['system:time_start'])
+
+def maskedS2Collection (startDate, endDate):
+  s2Sr = ee.ImageCollection('COPERNICUS/S2_SR')
+  s2Clouds = ee.ImageCollection('COPERNICUS/S2_CLOUD_PROBABILITY')
+  #Filter input collections by desired data range and region.
+  criteria = ee.Filter.date(startDate, endDate)
+  #s2Sr = s2Sr.filter(criteria).map(maskEdges)
+  s2Clouds = s2Clouds.filter(criteria)
+  # Join S2 SR with cloud probability dataset to add cloud mask.
+  s2SrWithCloudMask = ee.Join.saveFirst('cloud_mask').apply(s2Sr, s2Clouds, ee.Filter.equals(leftField='system:index', rightField='system:index'))
+  return ee.ImageCollection(s2SrWithCloudMask).map(maskS2Clouds)
+  
 # /**
 # * Function to mask clouds using the Sentinel-2 QA band
 # * @param {ee.Image} image Sentinel-2 image
@@ -102,42 +116,45 @@ def oneBandDiff(compositeYearOne, compositeYearTwo, band1):
   image255 = make255(YearOneYearTwoPercent, band1)
   return image255
 
-# exports image to Google Drive
-def exportGeoTiff(image, exportName):
-  geometries=states.map(getGeometry).getInfo().get('features')
-  # loop on client side
-  for geom in geometries:
-    task_config={'image':image,
-               'region':ee.Geometry(geometry).intersection(ee.Feature(geom).geometry(),1).bounds().getInfo()['coordinates'],
-               'description':exportName+geom['properties']['state_abbr'],
+def exportRegionGeoTiff(image, exportName):
+  conus = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'PR'),(ee.Filter.eq('state_abbr', 'VI'))).Not()).geometry().bounds();
+  prvi = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'PR'),(ee.Filter.eq('state_abbr', 'VI')))).geometry().bounds();
+																												
+						 
+  task_config={'image':image,
+               'region':conus,
+               'description':exportName+productName+'CONUS',
                'scale':30,
                'maxPixels':1e13,
+#               'shardSize': 10*256,
+               'fileDimensions': [35840,56320],
                'formatOptions': {'cloudOptimized': True}}
-    task = ee.batch.Export.image.toDrive(**task_config)
-    task.start()
-    ids_file.write(',{0}'.format(task.id))
-    print ('task ID', task.id, geom['properties']['state_abbr'])
-    
-# exports image to Asset
-def exportGeoTiffToAsset(image, exportName):
-    task_config={'image':image,
-               'region':geometry,
-               'description':exportName,
+  task = ee.batch.Export.image.toDrive(**task_config)
+  task.start()
+  ids_file.write(',{0}'.format(task.id))
+																
+
+						
+											
+  task_config={'image':image,
+               'region':prvi,
+               'description':exportName+productName+'PRVI',
                'scale':30,
                'maxPixels':1e13,
-               'assetId': 'users/'+USERNAME+'/' + exportName}
-    task = ee.batch.Export.image.toAsset(**task_config)
-    task.start()
-    metadata_ids_file.write(', {0}'.format(task.id))
-    print ('task ID', task.id)
-    
+#               'shardSize': 10*256,
+               'fileDimensions': [35840,56320],
+               'formatOptions': {'cloudOptimized': True}}
+  task = ee.batch.Export.image.toDrive(**task_config)
+  task.start()
+  ids_file.write(',{0}'.format(task.id))
+ 
 def sceneFeatures(scene):
   return ee.Feature(geometry, {'value': scene})
   
 ee.Initialize()
-ids_file, metadata_ids_file = parseCmdLine() 
+states = ee.FeatureCollection("users/landsatfact/SGSF_states")
+S2 = parseCmdLine() 
 ids_file = open(ids_file, "w")
-metadata_ids_file = open(metadata_ids_file, "w")
 mstimeone = now_milliseconds()
 
 #convert to server-side datetime
@@ -153,69 +170,65 @@ endWinterDate=ee.Date.fromYMD(endWinter, 3, 31, 'America/New_York')
 lastWinterBeginDate=ee.Date.fromYMD(secondYear, 11, 1, 'America/New_York')
 lastWinterEndDate=ee.Date.fromYMD(startYear, 3, 31, 'America/New_York')
 curentYearBeginDate=ee.Date.fromYMD(startYear, 1, 1, 'America/New_York')
-
-LANDSAT8 = 'LANDSAT/LC08/C01/T1_SR'
-Sentinel2 = 'COPERNICUS/S2'
-
-landsat_sat = 'L8'  # L8 or S2 
+waterThreshold = 0
+geometry = states.geometry().bounds()
 # set default bands and cloud mask
-if landsat_sat=='L8':
-    nir = 'B5'
-    red = 'B4'
-    blue = 'B2'
-    green = 'B3'
-    swir1 = 'B6'
-    swir2 = 'B7'
-    LANDSAT = LANDSAT8
-    mask = maskLandsatClouds
-    dateID = 'LANDSAT_ID'
-elif landsat_sat=='S2':
+if S2:
     nir = 'B8'
     red = 'B4'
     blue = 'B2'
     green = 'B3'
     swir1 = 'B11'
     swir2 = 'B12'
-    LANDSAT = Sentinel2
-    mask = maskS2Clouds
+    SATELLITE = 'COPERNICUS/S2_SR'
+    mask = maskS2CloudsQA60
     dateID = 'DATATAKE_IDENTIFIER'
-
-# defaults
-LANDSAT = LANDSAT8
-nir = 'B5'
-red = 'B4'
-blue = 'B2'
-green = 'B3'
-swir1 = 'B6'
-swir2 = 'B7'
-waterThreshold = 0
-mask = maskLandsatClouds
-dateID = 'LANDSAT_ID'
+    productName = 'S2'
+else:
+    nir = 'B5'
+    red = 'B4'
+    blue = 'B2'
+    green = 'B3'
+    swir1 = 'B6'
+    swir2 = 'B7'
+    SATELLITE = 'LANDSAT/LC08/C01/T1_SR'
+    mask = maskLandsatClouds
+    dateID = 'LANDSAT_ID'
+    productName = 'L8'
+#pdb.set_trace()
 
 states = ee.FeatureCollection("users/landsatfact/SGSF_states")
-geometry = states.geometry().bounds()
 # Collect one year of changes over the start and second years, for a date range  
 # from the beginning of secondYear winter in secondYear - 1 to end of startYear winter in startYear + 1
 # early in the year (before 3/31) use at least 30 days of data 
 # e.g., 11/1 to 12/1 on Jan.1 of the current year
 # later in the year restrict this range to the end of winter (3/31)
-collectionRangeStart = ee.ImageCollection(LANDSAT).filterDate(lastWinterBeginDate,t2.advance(-30,'day')).filterDate(lastWinterBeginDate, lastWinterEndDate).map(addDateBand)
-collectionRangeEnd = ee.ImageCollection(LANDSAT).filterDate(curentYearBeginDate, endWinterDate).map(addDateBand)
+# Collect one year of changes over the start and second years, for a date range  
+# from the beginning of secondYear winter in secondYear - 1 to end of startYear winter in startYear + 1
+
+#for cloud masking with S2_CLOUD_PROBABILITY which is roughly 4 times slower
+'''
+if S2:
+    collectionRangeStart = maskedS2Collection(secondYear + beginDay, startYear + endDay).map(addDateBand)
+    collectionRangeEnd = maskedS2Collection(startYear + beginDay, endWinter + endDay).map(addDateBand)
+    compositeRangeStart = collectionRangeStart.median()
+    compositeRangeEnd = collectionRangeEnd.median()
+else:'''
+collectionRangeStart = ee.ImageCollection(SATELLITE).filterDate(lastWinterBeginDate,t2.advance(-30,'day')).filterDate(lastWinterBeginDate, lastWinterEndDate).map(addDateBand)
+collectionRangeEnd = ee.ImageCollection(SATELLITE).filterDate(curentYearBeginDate, endWinterDate).map(addDateBand)
 
 ag_array=collectionRangeStart.filterBounds(geometry).distinct(dateID).aggregate_array(dateID)
 fc = ee.FeatureCollection(ag_array.map(sceneFeatures))
-task_config={'collection': fc, 'description': 'scenesBegin',
-               'assetId': 'users/'+USERNAME+'/scenesBegin'}	
-task = ee.batch.Export.table.toAsset(**task_config)
+task_config={'collection': fc, 'description': 'SWIR-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear)+'scenesBegin'+productName}	
+task = ee.batch.Export.table.toDrive(**task_config)
 task.start()
-metadata_ids_file.write(',{0}'.format(task.id))
+ids_file.write(',{0}'.format(task.id))
 ag_array=collectionRangeEnd.filterBounds(geometry).distinct(dateID).aggregate_array(dateID)
 fc = ee.FeatureCollection(ag_array.map(sceneFeatures))
-task_config={'collection': fc, 'description': 'scenesEnd',
-               'assetId': 'users/'+USERNAME+'/scenesEnd'}	
-task = ee.batch.Export.table.toAsset(**task_config)
+task_config={'collection': fc, 'description': 'SWIR-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear)+'scenesEnd'+productName}	
+task = ee.batch.Export.table.toDrive(**task_config)
 task.start()
-metadata_ids_file.write(',{0}'.format(task.id))
+ids_file.write(',{0}'.format(task.id))
 
 compositeRangeStart = collectionRangeStart.map(mask).median()
 compositeRangeEnd = collectionRangeEnd.map(mask).median()
@@ -249,13 +262,12 @@ SWIRChangeCustomRange = oneBandDiff(compositeSecondYear,compositeStartYear, swir
 #exportGeoTiff(RGBStartYear, 'RGB'+ startYear)
 #exportGeoTiff(RGBSecondYear, 'RGB'+ secondYear)
 
-exportGeoTiff(NDVIChangeCustomRange, 'NDVI-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear))
-exportGeoTiff(SWIRChangeCustomRange, 'SWIR-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear))
-exportGeoTiff(NDMIChangeCustomRange, 'NDMI-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear))
+exportRegionGeoTiff(NDVIChangeCustomRange, 'NDVI-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear))
+exportRegionGeoTiff(SWIRChangeCustomRange, 'SWIR-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear))
+exportRegionGeoTiff(NDMIChangeCustomRange, 'NDMI-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear))
 
 #export datetimes used for pixel values in one year of changes over the start and second years
-exportGeoTiffToAsset(compositeStartYear.select(['system:time_start'], ['observationDate']), 'datesBegin'+ str(startYear))
-exportGeoTiffToAsset(compositeSecondYear.select(['system:time_start'], ['observationDate']), 'datesEnd'+ str(startYear))
+exportRegionGeoTiff(compositeStartYear.select(['system:time_start'], ['observationDate']), 'SWIR-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear)+'datesBegin')
+exportRegionGeoTiff(compositeSecondYear.select(['system:time_start'], ['observationDate']), 'SWIR-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear)+'datesEnd')
 
 ids_file.close()
-metadata_ids_file.close()
