@@ -130,6 +130,7 @@ def sceneFeatures(scene):
   return ee.Feature(geometry, {'value': scene})
  
 states = ee.FeatureCollection("users/landsatfact/SGSF_states")
+water = ee.Image("users/landsatfact/sgsfWaterMask")
 S2, startYear = parseCmdLine() 
 ids_file = open(ids_file, "w")
 LANDSAT8 = 'LANDSAT/LC08/C01/T1_SR'
@@ -139,7 +140,7 @@ endDay='-03-31'
 secondYear = str(int(startYear)-1)
 beginWinter = str(int(secondYear)-1)
 endWinter = str(int(startYear)+1)
-waterThreshold = 0
+#waterThreshold = 0
 geometry = states.geometry().bounds()
 
 # set default bands and cloud mask
@@ -186,14 +187,11 @@ compositeStartYear = compositeRangeEnd # Start Year average - "custom request"
 compositeSecondYear = compositeRangeStart # Second Year average - "custom request"
 
 # add the NDWI band to the image so we can get water masks
-ndwi = compositeStartYear.normalizedDifference([green, swir1]).rename('NDWI')
-
-# get pixels above the threshold
-water = ndwi.lte(waterThreshold)
+#ndwi = compositeStartYear.normalizedDifference([green, swir1]).rename('NDWI')
 
 # update composites with water masks
-compositeStartYear = compositeStartYear.updateMask(water)
-compositeSecondYear = compositeSecondYear.updateMask(water)
+compositeStartYear = compositeStartYear.updateMask(water.select('b1').neq(1))
+compositeSecondYear = compositeSecondYear.updateMask(water.select('b1').neq(1))
 
 # SWIR change
 SWIRChangeCustomRange = oneBandDiff(compositeSecondYear,compositeStartYear, swir2)
