@@ -166,7 +166,7 @@ secondYear = t3.get('year').getInfo()
 t4 = t3.advance(-1, 'year')
 beginWinter = t4.get('year')
 endWinter =(t2.advance(+1, 'year').get('year'))
-endWinterDate=ee.Date.fromYMD(endWinter, 3, 31, 'America/New_York')
+endDate=t2
 lastWinterBeginDate=ee.Date.fromYMD(secondYear, 11, 1, 'America/New_York')
 lastWinterEndDate=ee.Date.fromYMD(startYear, 3, 31, 'America/New_York')
 curentYearBeginDate=ee.Date.fromYMD(startYear, 1, 1, 'America/New_York')
@@ -202,7 +202,8 @@ states = ee.FeatureCollection("users/landsatfact/SGSF_states")
 # from the beginning of secondYear winter in secondYear - 1 to end of startYear winter in startYear + 1
 # early in the year (before 3/31) use at least 30 days of data 
 # e.g., 11/1 to 12/1 on Jan.1 of the current year
-# later in the year restrict this range to the end of winter (3/31)
+# shouuld we, later in the year, restrict this range to the end of winter (3/31)
+# currently, after April, we begin to see greenup changes. 
 # Collect one year of changes over the start and second years, for a date range  
 # from the beginning of secondYear winter in secondYear - 1 to end of startYear winter in startYear + 1
 
@@ -215,7 +216,7 @@ if S2:
     compositeRangeEnd = collectionRangeEnd.median()
 else:'''
 collectionRangeStart = ee.ImageCollection(SATELLITE).filterDate(lastWinterBeginDate,t2.advance(-30,'day')).filterDate(lastWinterBeginDate, lastWinterEndDate).map(addDateBand)
-collectionRangeEnd = ee.ImageCollection(SATELLITE).filterDate(curentYearBeginDate, endWinterDate).map(addDateBand)
+collectionRangeEnd = ee.ImageCollection(SATELLITE).filterDate(curentYearBeginDate, endDate).map(addDateBand)
 
 ag_array=collectionRangeStart.filterBounds(geometry).distinct(dateID).aggregate_array(dateID)
 fc = ee.FeatureCollection(ag_array.map(sceneFeatures))
