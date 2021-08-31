@@ -1,30 +1,18 @@
 from __future__ import print_function
-import logging
-import boto3
+import logging, boto3, pickle, io, argparse, contextlib, json, re, threading, time, uuid, ee, subprocess, datetime, os, pdb
 from botocore.exceptions import ClientError
 from os import listdir
-import pickle
-import os.path
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.http import MediaIoBaseDownload
-import io, argparse
-import contextlib
-import json
-import re
-import threading
-import time
-import uuid
-import time
-import ee
-import subprocess, datetime, os, pdb
 from osgeo import gdal
 from os.path import isfile, join
 from userConfig import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, downloadDir, outputGeoTIFFDir, ids_file, drive_key_file, credentials_file
-
+outputDir = outputGeoTIFFDir
+# Will parse the arguments provided on the command line.
 def parseCmdLine():
-    # Will parse the arguments provided on the command line.
+
     parser = argparse.ArgumentParser(description='Download GEE products and create regional GeoTIFF')    
     parser.add_argument('-yearly',help="pipeline for yearly change products. Default is for latest change.", action='store_true')
     parser.add_argument('-year',help="in pipeline for yearly change products, the most recent year being processed. e.g., 2019")
@@ -83,6 +71,7 @@ def translateToGeoTIFF(inRaster, outRasterPath):
     # non-zero is error
     return errcode
 
+#download a file from Drive
 def download(filename, fileId, service):
     # download to disk and remove from drive
     print(filename)    
@@ -95,9 +84,9 @@ def download(filename, fileId, service):
         print ("Download %d%%." % int(status.progress() * 100))
     file = service.files().delete(fileId=fileId).execute()
 
+# download any available yearly or latest change products
 def downloadMultiple(aListOfDicts, service):
     downloadedFiles=[]
-    # download any available yearly or latest change products
     p = re.compile('(NDVI|SWIR|NDMI)(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}\w*(L8|S2)')           
     for d in aListOfDicts:
         i=d['id']
@@ -108,6 +97,7 @@ def downloadMultiple(aListOfDicts, service):
             downloadedFiles.append(n)
     return downloadedFiles
     
+#answer the number of pending tasks in GEE     
 def pendingTasks(ids):
     tasks = ee.data.getTaskList() 
     myTasks = list(filter(lambda x: x['id'] in ids, tasks))     
@@ -115,7 +105,8 @@ def pendingTasks(ids):
     outstandingPendingTasks=len(myPendingTasks)
     print('pending tasks: {0}'.format(outstandingPendingTasks))
     return outstandingPendingTasks
-    
+
+#answer the number of tasks remaining in the pipeline           
 def completedTasksRemaining(ids):
     tasks = ee.data.getTaskList() 
     myTasks = list(filter(lambda x: x['id'] in ids, tasks))     
@@ -123,17 +114,72 @@ def completedTasksRemaining(ids):
     outstandingCompletedTasks=len(myCompletedTasks)
     print('completed tasks: {0}'.format(outstandingCompletedTasks))
     return outstandingCompletedTasks<len(ids)
-    
+
+#create regionwide GeoTIFF
 def mosaicDownloadedToGeotiff(p,mosaicTiffName):
     onlyfiles = [f for f in os.listdir(downloadDir) if isfile(join(downloadDir, f))]    
     mosaic([s for s in onlyfiles if p.match(s)], downloadDir+mosaicTiffName)
-    translateToGeoTIFF(downloadDir+mosaicTiffName, outputGeoTIFFDir+mosaicTiffName)
+    translateToGeoTIFF(downloadDir+mosaicTiffName, outputDir+mosaicTiffName)
+
+#create change poly shapefiles for the states   
+def polygonize(inRaster, outShapePath):
+    tempfile = downloadDir+'/changePolys.tiff'
+
+    print("Begin polygonize at ", datetime.datetime.now())
+    with rasterio.Env():
+        with rasterio.open(inRaster, 'r') as src:
+            with rasterio.open(tempfile, 'w', **src.profile) as dst:
+                for ij, window in src.block_windows():
+                    array = src.read(window=window)
+                    array=array.astype(dtype=np.int16, copy=False)
+                    array -= 186
+                    result = np.clip(array, 0,1)
+                    dst.write(result.astype(dtype=np.uint8, copy=False), window=window)
    
-    
+        with rasterio.open(tempfile) as src:
+            image = src.read(1) # first band
+            print("Convert to shapes ", datetime.datetime.now())
+            results = (
+            {'properties': {'raster_val': v}, 'geometry': s, 'area': Polygon(s['coordinates'][0]).area}
+            for i, (s, v)
+            # assumes 
+                in enumerate(
+                shapes(image, mask=None, transform=src.transform))if Polygon(s['coordinates'][0]).area > 80936 and v >0)
+            polys=list(results)
+
+    print("Begin shapefile creation ", datetime.datetime.now())
+    # transform polygons from WGS84 to Albers Equal Area Conic
+    schemaNew={"geometry": 'Polygon', "properties": OrderedDict({'raster_val': 'float', 'area': 'float'})}
+    #schemaNew={"geometry": 'Polygon', "properties": OrderedDict({'raster_val': 'float'})}
+
+
+    with fiona.open(outShapePath, "w", driver="ESRI Shapefile",crs=from_epsg(5070), schema=schemaNew) as c:
+        #wgs84 = pyproj.CRS('EPSG:4326')
+        #utm = pyproj.CRS('EPSG:32618')
+        #project = pyproj.Transformer.from_crs(wgs84, utm, always_xy=True).transform
+        for feature in polys:
+            #print("Feature: ", feature)
+            poly=Polygon(feature['geometry']['coordinates'][0])
+            c.write({
+                 'geometry': mapping(poly),
+                 'properties': {'raster_val': feature['properties']['raster_val'], 'area' : feature['area']}
+    })          
+
+#convert individual states yeary change to GeoTIFF
+def downloadedToShape(p,rasterName):
+    onlyfiles = [f for f in os.listdir(downloadDir) if isfile(join(downloadDir, f))]   
+    gen  = (s for s in onlyfiles if p.match(s))    
+    for tiffName in gen:
+        stateName = re.search(p,downloadedFiles[0]).group(2)
+        baseName = rasterName+stateName
+        translateToGeoTIFF(downloadDir+tiffName, downloadDir+baseName+ '.tif')
+        polygonize(downloadDir+baseName+ '.tif',outputDir+baseName+ '.shp')
+
+
 # If modifying these scopes, delete the file token.pickle.
 SCOPES = ['https://www.googleapis.com/auth/drive']
 def main():
-    """Using the Drive v3 API to download products from GEE for regioanl GeoTIFF."""
+    """Using the Drive v3 API to download products from GEE for upload to S3."""
     yearly, year, bucket = parseCmdLine()   
     if yearly: 
         productName = 'YearlyChange' + year
@@ -145,6 +191,7 @@ def main():
         csvString = "\'SWIR-Latest-Change-Between-*\'"
     successfulDownloads = 0 
     creds = None
+    pdb.set_trace() 
     # The file token.pickle stores the user's access and refresh tokens, and is
     # created automatically when the authorization flow completes for the first
     # time.
@@ -199,20 +246,24 @@ def main():
     # Mainland Southern states and PR VI mosaics
     print('Begin mosaic to geotiff at {0}'.format(datetime.datetime.now().strftime("%a, %d %B %Y %I:%M:%S")))
     os.chdir(downloadDir)
-    mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)(CONUS|PRVI)'), 'swir' + productName + satelliteName + 'CONUS.tif')
     mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}datesBegin(L8|S2)CONUS'), 'swirdatesBegin' + productName + satelliteName + 'CONUS.tif')
     mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}datesEnd(L8|S2)CONUS'), 'swirdatesEnd' + productName + satelliteName + 'CONUS.tif')
-    mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)PRVI'), 'swir' + productName + satelliteName + 'PRVI.tif')
     mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}datesBegin(L8|S2)PRVI'), 'swirdatesBegin' + productName + satelliteName + 'PRVI.tif')
     mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}datesEnd(L8|S2)PRVI'), 'swirdatesEnd' + productName + satelliteName + 'PRVI.tif')
-    if not yearly:
+    if yearly:
+        # for yearly statewide products produce a shapefile of change polys and a regional GeoTIFF
+        #pdb.set_trace()
+        downloadedToShape(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(LA|AR|MS|KY|TN|OK|VA|SC|NC|GA|AL|TX|FL|PR|VI)(L8|S2)', 'swir' + productName + satelliteName))
+    else:
+        mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)CONUS'), 'swir' + productName + satelliteName + 'CONUS.tif')
+        mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)PRVI'), 'swir' + productName + satelliteName + 'PRVI.tif')
         mosaicDownloadedToGeotiff(re.compile('NDMI(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)CONUS'), 'ndmi' + productName + satelliteName + 'CONUS.tif')  
         mosaicDownloadedToGeotiff(re.compile('NDMI(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)PRVI'), 'ndmi' + productName + satelliteName + 'PRVI.tif')  
         mosaicDownloadedToGeotiff(re.compile('NDVI(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)CONUS'),'ndvi' + productName + satelliteName + 'CONUS.tif')  
         mosaicDownloadedToGeotiff(re.compile('NDVI(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)PRVI'), 'ndvi' + productName + satelliteName + 'PRVI.tif')  
-    onlyfiles = [f for f in os.listdir(outputGeoTIFFDir) if isfile(join(outputGeoTIFFDir, f))]    
+    onlyfiles = [f for f in os.listdir(outputDir) if isfile(join(outputDir, f))]    
     for file in onlyfiles:
-        upload_file(outputGeoTIFFDir+file, "data.southfact.com", bucketName+file)
+        upload_file(outputDir+file, "data.southfact.com", bucketName+file)
     print ('Finished at {0}'.format(datetime.datetime.now().strftime("%a, %d %B %Y %I:%M:%S")))
 if __name__ == '__main__':
     main()
