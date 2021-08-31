@@ -97,8 +97,37 @@ def oneBandDiff(compositeYearOne, compositeYearTwo, band1):
   YearOneYearTwoPercent = YearOneYearTwoDivide.multiply(100)
   image255 = make255(YearOneYearTwoPercent, band1)
   return image255
-
+def getGeometry(feature):
+  # Keep this list of properties.
+  keepProperties = ['state_abbr']
+  # Get the centroid of the feature's geometry.
+  geom = feature.geometry().bounds()
+  # Return a new Feature, copying properties from the old Feature.
+  return ee.Feature(geom).copyProperties(feature, keepProperties)
+  
 # exports image to Google Drive
+def exportGeoTiff(image, exportName):
+  geometries=states.map(getGeometry).getInfo().get('features')
+  #print ('geometries', geometries)
+  # loop on client side
+  #https://gis.stackexchange.com/questions/236707/how-can-i-export-a-set-of-images-from-google-earth-engine/237065#237065
+  for geom in geometries:
+    feature=ee.Feature(geom);
+    abbr = feature.get('state_abbr').getInfo();
+    region = ee.Geometry(geometry).intersection(feature.geometry(),1).bounds();
+    print(abbr+' geometry', region.getInfo());
+    #https://gis.stackexchange.com/questions/326131/error-in-export-image-from-google-earth-engine-from-python-api
+    task_config={'image':image,
+              'region':region,
+              'description':exportName+abbr,
+              'scale':30,
+              'maxPixels':1e13,
+              'formatOptions': {'cloudOptimized': True}}
+    task = ee.batch.Export.image.toDrive(**task_config)
+    task.start()
+    ids_file.write(',{0}'.format(task.id))
+
+# exports image to Google Drive for a larger area than states
 def exportRegionGeoTiff(image, exportName):
   conus = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'PR'),(ee.Filter.eq('state_abbr', 'VI'))).Not()).geometry().bounds();
   prvi = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'PR'),(ee.Filter.eq('state_abbr', 'VI')))).geometry().bounds();
@@ -125,6 +154,7 @@ def exportRegionGeoTiff(image, exportName):
   task.start()
   ids_file.write(',{0}'.format(task.id))
  
+
 
 def sceneFeatures(scene):
   return ee.Feature(geometry, {'value': scene})
@@ -213,4 +243,4 @@ task = ee.batch.Export.table.toDrive(**task_config)
 task.start()
 ids_file.write(',{0}'.format(task.id))
 #Lastly export the yearly product
-exportRegionGeoTiff(SWIRChangeCustomRange, 'SWIR-Custom-Change-Between-'+startYear+'-and-'+secondYear)
+exportGeoTiff(SWIRChangeCustomRange, 'SWIR-Custom-Change-Between-'+startYear+'-and-'+secondYear)
