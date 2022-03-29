@@ -1,4 +1,4 @@
-import ee, time, datetime, argparse, pdb
+import ee, time, datetime, argparse, pdb, pathlib, shutil
 from userConfig import ids_file
 
 def parseCmdLine():
@@ -60,21 +60,28 @@ def maskS2Clouds(image):
 
   return image.updateMask(mask).divide(10000).copyProperties(image)
 
-  
+# Applies scaling factors.
+def applyScaleFactors(image) :
+  opticalBands = image.select('SR_B.').multiply(0.0000275).add(-0.2)
+  thermalBands = image.select('ST_B.*').multiply(0.00341802).add(149.0)
+  return image.addBands(opticalBands, None, True).addBands(thermalBands, None, True)
+
+ 
 # Function to cloud mask from the pixel_qa band of Landsat 8 SR data.
 def maskLandsatClouds(image):
-  # Bits 3 and 5 are cloud shadow and cloud, respectively.
-  cloudShadowBitMask = 1 << 3
-  cloudsBitMask = 1 << 5
-
+  cloudShadowBitMask = ee.Number(2).pow(4).int();
+  cloudsBitMask = ee.Number(2).pow(3).int();
+  cirrusBitMask = ee.Number(2).pow(2).int();
+  dilatedCloudsBitMask = ee.Number(2).pow(1).int();
   # Get the pixel QA band.
-  qa = image.select('pixel_qa')
+  qa = image.select('QA_PIXEL');
 
   # Both flags should be set to zero, indicating clear conditions.
   mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0).And(qa.bitwiseAnd(cloudsBitMask).eq(0))
-
-  # Return the masked image, scaled to TOA reflectance, without the QA bands.
-  return image.updateMask(mask).divide (10000).select("B[0-9]*").addBands(qa).addBands(image.select('system:time_start')).copyProperties(image, ['system:time_start'])
+  # Scale to surface reflectance.
+  image = applyScaleFactors(image)
+  # Return the masked image, scaled to surface reflectance, without the QA bands.
+  return image.updateMask(mask).select("SR_B[0-9]*").addBands(qa).addBands(image.select('system:time_start')).copyProperties(image, ['system:time_start'])
       
 # add band to identify unix time of every pixel used in the composite
 def addDateBand(image): 
@@ -116,33 +123,38 @@ def oneBandDiff(compositeYearOne, compositeYearTwo, band1):
   image255 = make255(YearOneYearTwoPercent, band1)
   return image255
 
-def exportRegionGeoTiff(image, exportName):
-  conus = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'PR'),(ee.Filter.eq('state_abbr', 'VI'))).Not()).geometry().bounds();
-  prvi = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'PR'),(ee.Filter.eq('state_abbr', 'VI')))).geometry().bounds();
-																												
-						 
+def exportRegionGeoTiff(image, indexName,startYear, secondYear):						 
   task_config={'image':image,
-               'region':conus,
-               'description':exportName+productName+'CONUS',
+               'region':conus1,
+               'description':indexName+'-Latest-Change-Between-'+startYear+'-and-'+secondYear+productName+'CONUS',
                'scale':30,
                'maxPixels':1e13,
-#               'shardSize': 10*256,
-               'fileDimensions': [35840,56320],
+               'shardSize':256,
+               'fileDimensions': [75264,55808],
                'formatOptions': {'cloudOptimized': True}}
   task = ee.batch.Export.image.toDrive(**task_config)
   task.start()
   ids_file.write(',{0}'.format(task.id))
 																
-
-						
-											
   task_config={'image':image,
-               'region':prvi,
-               'description':exportName+productName+'PRVI',
+               'region':conus2,
+               'description':indexName+'1'+'-Latest-Change-Between-'+startYear+'-and-'+secondYear+productName+'CONUS',
                'scale':30,
                'maxPixels':1e13,
-#               'shardSize': 10*256,
-               'fileDimensions': [35840,56320],
+               'shardSize':256,
+               'fileDimensions': [75264,55808],
+               'formatOptions': {'cloudOptimized': True}}
+  task = ee.batch.Export.image.toDrive(**task_config)
+  task.start()
+  ids_file.write(',{0}'.format(task.id))
+																	
+  task_config={'image':image,
+               'region':prvi,
+               'description':indexName+'-Latest-Change-Between-'+startYear+'-and-'+secondYear+productName+'PRVI',
+               'scale':30,
+               'maxPixels':1e13,
+               'shardSize':256,
+               'fileDimensions': [75264,55808],
                'formatOptions': {'cloudOptimized': True}}
   task = ee.batch.Export.image.toDrive(**task_config)
   task.start()
@@ -150,10 +162,23 @@ def exportRegionGeoTiff(image, exportName):
  
 def sceneFeatures(scene):
   return ee.Feature(geometry, {'value': scene})
+    
+# create my workspaces, but no complaints if they are already there
+path = pathlib.Path('/mnt/efs/fs1/GeoTIFF')    
+path.mkdir(parents=True, exist_ok=True)
+path = pathlib.Path('/mnt/efs/fs1/output')    
+path.mkdir(parents=True, exist_ok=True)
   
 ee.Initialize()
 states = ee.FeatureCollection("users/landsatfact/SGSF_states")
-S2 = parseCmdLine() 
+prvi = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'PR'),(ee.Filter.eq('state_abbr', 'VI')))).geometry().bounds();
+conus1 = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'KY'),(ee.Filter.eq('state_abbr', 'VA')),
+                          (ee.Filter.eq('state_abbr', 'TN')),(ee.Filter.eq('state_abbr', 'NC')),
+                          (ee.Filter.eq('state_abbr', 'MS')),(ee.Filter.eq('state_abbr', 'AL')),
+                          (ee.Filter.eq('state_abbr', 'GA')),(ee.Filter.eq('state_abbr', 'SC')),
+                          (ee.Filter.eq('state_abbr', 'FL')))).geometry().bounds();
+conus2 = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'OK'),(ee.Filter.eq('state_abbr', 'TX')),
+                          (ee.Filter.eq('state_abbr', 'AR')),(ee.Filter.eq('state_abbr', 'LA')))).geometry().bounds();S2 = parseCmdLine() 
 ids_file = open(ids_file, "w")
 mstimeone = now_milliseconds()
 
@@ -185,17 +210,16 @@ if S2:
     dateID = 'DATATAKE_IDENTIFIER'
     productName = 'S2'
 else:
-    nir = 'B5'
-    red = 'B4'
-    blue = 'B2'
-    green = 'B3'
-    swir1 = 'B6'
-    swir2 = 'B7'
-    SATELLITE = 'LANDSAT/LC08/C01/T1_SR'
+    nir = 'SR_B5'
+    red = 'SR_B4'
+    blue = 'SR_B2'
+    green = 'SR_B3'
+    swir1 = 'SR_B6'
+    swir2 = 'SR_B7'
+    SATELLITE = 'LANDSAT/LC08/C02/T1_L2'
     mask = maskLandsatClouds
-    dateID = 'LANDSAT_ID'
+    dateID = 'LANDSAT_SCENE_ID'
     productName = 'L8'
-#pdb.set_trace()
 
 states = ee.FeatureCollection("users/landsatfact/SGSF_states")
 # Collect one year of changes over the start and second years, for a date range  
@@ -216,7 +240,9 @@ if S2:
     compositeRangeEnd = collectionRangeEnd.median()
 else:'''
 collectionRangeStart = ee.ImageCollection(SATELLITE).filterDate(lastWinterBeginDate,t2.advance(-30,'day')).filterDate(lastWinterBeginDate, lastWinterEndDate).map(addDateBand)
-collectionRangeEnd = ee.ImageCollection(SATELLITE).filterDate(curentYearBeginDate, endDate).map(addDateBand)
+# debuging
+collectionRangeEnd = ee.ImageCollection(SATELLITE).filterDate('2021-11-01', '2021-12-31').map(addDateBand)
+#collectionRangeEnd = ee.ImageCollection(SATELLITE).filterDate(curentYearBeginDate, endDate).map(addDateBand)
 
 ag_array=collectionRangeStart.filterBounds(geometry).distinct(dateID).aggregate_array(dateID)
 fc = ee.FeatureCollection(ag_array.map(sceneFeatures))
@@ -263,12 +289,12 @@ SWIRChangeCustomRange = oneBandDiff(compositeSecondYear,compositeStartYear, swir
 #exportGeoTiff(RGBStartYear, 'RGB'+ startYear)
 #exportGeoTiff(RGBSecondYear, 'RGB'+ secondYear)
 
-exportRegionGeoTiff(NDVIChangeCustomRange, 'NDVI-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear))
-exportRegionGeoTiff(SWIRChangeCustomRange, 'SWIR-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear))
-exportRegionGeoTiff(NDMIChangeCustomRange, 'NDMI-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear))
+exportRegionGeoTiff(NDVIChangeCustomRange,'NDVI',str(startYear),str(secondYear))
+exportRegionGeoTiff(SWIRChangeCustomRange,'SWIR',str(startYear),str(secondYear))
+exportRegionGeoTiff(NDMIChangeCustomRange,'NDMI',str(startYear),str(secondYear))
 
-#export datetimes used for pixel values in one year of changes over the start and second years
-exportRegionGeoTiff(compositeStartYear.select(['system:time_start'], ['observationDate']), 'SWIR-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear)+'datesBegin')
-exportRegionGeoTiff(compositeSecondYear.select(['system:time_start'], ['observationDate']), 'SWIR-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear)+'datesEnd')
+#export datetimes used for pixel values in one year of changes over the start and second years. Ignore metadata for now due to speed and Drive space concerns
+#exportRegionGeoTiff(compositeStartYear.select(['system:time_start'], ['observationDate']), 'SWIR-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear)+'datesBegin')
+#exportRegionGeoTiff(compositeSecondYear.select(['system:time_start'], ['observationDate']), 'SWIR-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear)+'datesEnd')
 
 ids_file.close()

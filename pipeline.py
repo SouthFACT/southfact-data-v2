@@ -1,5 +1,5 @@
 from __future__ import print_function
-import logging, boto3, pickle, io, argparse, contextlib, json, re, threading, time, uuid, ee, subprocess, datetime, os, pdb
+import logging, boto3, pickle, io, argparse, contextlib, json, re, threading, time, uuid, ee, subprocess, datetime, os, pdb, pathlib, shutil
 from botocore.exceptions import ClientError
 from os import listdir
 from googleapiclient.discovery import build
@@ -48,6 +48,7 @@ def upload_file(file_name, bucket, object_name=None):
 #     [outRasterPath] - full path to the output raster in epsg:5070 projection
 # @return errcode
 def mosaic(inRasterList, outRasterPath):
+    gdal.SetConfigOption('CHECK_DISK_FREE_SPACE', 'FALSE')
     codeIn = ['gdalwarp','-t_srs', 'EPSG:5070'] + inRasterList + [outRasterPath]
     process = subprocess.Popen(codeIn,stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     out,err = process.communicate()
@@ -87,7 +88,7 @@ def download(filename, fileId, service):
 # download any available yearly or latest change products
 def downloadMultiple(aListOfDicts, service):
     downloadedFiles=[]
-    p = re.compile('(NDVI|SWIR|NDMI)(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}\w*(L8|S2)')           
+    p = re.compile('(NDVI.?|SWIR.?|NDMI.?)(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}\w*(L8|S2)')           
     for d in aListOfDicts:
         i=d['id']
         n=d['name']
@@ -117,6 +118,8 @@ def completedTasksRemaining(ids):
 
 #create regionwide GeoTIFF
 def mosaicDownloadedToGeotiff(p,mosaicTiffName):
+    print('GeoTIFFs input: {0}'.format(downloadDir+mosaicTiffName))
+    print('GeoTIFFs output: {0}'.format(outputDir+mosaicTiffName))
     onlyfiles = [f for f in os.listdir(downloadDir) if isfile(join(downloadDir, f))]    
     mosaic([s for s in onlyfiles if p.match(s)], downloadDir+mosaicTiffName)
     translateToGeoTIFF(downloadDir+mosaicTiffName, outputDir+mosaicTiffName)
@@ -191,7 +194,7 @@ def main():
         csvString = "\'SWIR-Latest-Change-Between-*\'"
     successfulDownloads = 0 
     creds = None
-    pdb.set_trace() 
+    #pdb.set_trace() 
     # The file token.pickle stores the user's access and refresh tokens, and is
     # created automatically when the authorization flow completes for the first
     # time.
@@ -238,7 +241,7 @@ def main():
     downloadedFiles = downloadMultiple(items,service)
     successfulDownloads=len(downloadedFiles)
     #pdb.set_trace()  
-    p=re.compile('(NDVI|SWIR|NDMI)(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}\w*(L8|S2)')
+    p=re.compile('(NDVI.?|SWIR.?|NDMI.?)(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}\w*(L8|S2)')
     satelliteName = re.search(p,downloadedFiles[0]).group(3)
     if successfulDownloads == 2:
         upload_file(downloadDir+downloadedFiles[0], "data.southfact.com", bucketName+downloadedFiles[0])
@@ -246,24 +249,28 @@ def main():
     # Mainland Southern states and PR VI mosaics
     print('Begin mosaic to geotiff at {0}'.format(datetime.datetime.now().strftime("%a, %d %B %Y %I:%M:%S")))
     os.chdir(downloadDir)
-    mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}datesBegin(L8|S2)CONUS'), 'swirdatesBegin' + productName + satelliteName + 'CONUS.tif')
-    mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}datesEnd(L8|S2)CONUS'), 'swirdatesEnd' + productName + satelliteName + 'CONUS.tif')
-    mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}datesBegin(L8|S2)PRVI'), 'swirdatesBegin' + productName + satelliteName + 'PRVI.tif')
-    mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}datesEnd(L8|S2)PRVI'), 'swirdatesEnd' + productName + satelliteName + 'PRVI.tif')
+    # no metadata for now
+    #mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}datesBegin(L8|S2)CONUS'), 'swirdatesBegin' + productName + satelliteName + 'CONUS.tif')
+    #mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}datesEnd(L8|S2)CONUS'), 'swirdatesEnd' + productName + satelliteName + 'CONUS.tif')
+    #mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}datesBegin(L8|S2)PRVI'), 'swirdatesBegin' + productName + satelliteName + 'PRVI.tif')
+    #mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}datesEnd(L8|S2)PRVI'), 'swirdatesEnd' + productName + satelliteName + 'PRVI.tif')
     if yearly:
         # for yearly statewide products produce a shapefile of change polys and a regional GeoTIFF
         #pdb.set_trace()
-        downloadedToShape(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(LA|AR|MS|KY|TN|OK|VA|SC|NC|GA|AL|TX|FL|PR|VI)(L8|S2)', 'swir' + productName + satelliteName))
+        downloadedToShape(re.compile('SWIR.?(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(LA|AR|MS|KY|TN|OK|VA|SC|NC|GA|AL|TX|FL|PR|VI)(L8|S2)', 'swir' + productName + satelliteName))
     else:
-        mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)CONUS'), 'swir' + productName + satelliteName + 'CONUS.tif')
-        mosaicDownloadedToGeotiff(re.compile('SWIR(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)PRVI'), 'swir' + productName + satelliteName + 'PRVI.tif')
-        mosaicDownloadedToGeotiff(re.compile('NDMI(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)CONUS'), 'ndmi' + productName + satelliteName + 'CONUS.tif')  
-        mosaicDownloadedToGeotiff(re.compile('NDMI(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)PRVI'), 'ndmi' + productName + satelliteName + 'PRVI.tif')  
-        mosaicDownloadedToGeotiff(re.compile('NDVI(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)CONUS'),'ndvi' + productName + satelliteName + 'CONUS.tif')  
-        mosaicDownloadedToGeotiff(re.compile('NDVI(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)PRVI'), 'ndvi' + productName + satelliteName + 'PRVI.tif')  
+        mosaicDownloadedToGeotiff(re.compile('SWIR.?(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)CONUS'), 'swir' + productName + satelliteName + 'CONUS.tif')
+        mosaicDownloadedToGeotiff(re.compile('SWIR.?(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)PRVI'), 'swir' + productName + satelliteName + 'PRVI.tif')
+        mosaicDownloadedToGeotiff(re.compile('NDMI.?(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)CONUS'), 'ndmi' + productName + satelliteName + 'CONUS.tif')  
+        mosaicDownloadedToGeotiff(re.compile('NDMI.?(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)PRVI'), 'ndmi' + productName + satelliteName + 'PRVI.tif')  
+        mosaicDownloadedToGeotiff(re.compile('NDVI.?(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)CONUS'),'ndvi' + productName + satelliteName + 'CONUS.tif')  
+        mosaicDownloadedToGeotiff(re.compile('NDVI.?(-Latest|-Custom)-Change-Between-[0-9]{4}-and-[0-9]{4}(L8|S2)PRVI'), 'ndvi' + productName + satelliteName + 'PRVI.tif')  
     onlyfiles = [f for f in os.listdir(outputDir) if isfile(join(outputDir, f))]    
     for file in onlyfiles:
         upload_file(outputDir+file, "data.southfact.com", bucketName+file)
+    #clean up my mess
+    shutil.rmtree('/mnt/efs/fs1/GeoTIFF')  
+    shutil.rmtree('/mnt/efs/fs1/output')        
     print ('Finished at {0}'.format(datetime.datetime.now().strftime("%a, %d %B %Y %I:%M:%S")))
 if __name__ == '__main__':
     main()
