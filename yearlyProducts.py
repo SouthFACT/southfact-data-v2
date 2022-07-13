@@ -1,6 +1,10 @@
-import ee, datetime, argparse, pdb
+import ee, datetime, argparse, pdb, collections
 from userConfig import ids_file
-ee.Initialize()
+service_account = 'aws-southfact-product-generati@awsproductgeneration.iam.gserviceaccount.com'
+credentials = ee.ServiceAccountCredentials(service_account, '../keys/awsproductgeneration-8463a020b9aa.json')
+collections.Callable = collections.abc.Callable
+ee.Initialize(credentials)
+
 
 def parseCmdLine():
     # Will parse the arguments provided on the command line.
@@ -22,7 +26,7 @@ def maskS2CloudsQA60(image):
   cirrusBitMask = 1 << 11
   # Both flags should be set to zero, indicating clear conditions.
   mask = qa.bitwiseAnd(cloudBitMask).eq(0).And(qa.bitwiseAnd(cirrusBitMask).eq(0))
-  return image.updateMask(mask)
+  return image.updateMask(mask).divide(10000)
  
 # /**
 # * Function to mask clouds using the Sentinel-2 QA band
@@ -104,31 +108,46 @@ def getGeometry(feature):
   geom = feature.geometry().bounds()
   # Return a new Feature, copying properties from the old Feature.
   return ee.Feature(geom).copyProperties(feature, keepProperties)
-  
-# exports image to Google Drive
-def exportGeoTiff(image, exportName):
+ 
+def addArea(feature) :
+    return feature.set('area', feature.geometry().area(1));
+
+
+def createStateShapes(feature, image) : 
+    # create the changeShapes for each grid cell
+    changeShapes= image.gt(186).reduceToVectors(
+        reducer = ee.Reducer.countEvery(),
+        geometry = feature.geometry(1),
+        scale = 30,
+        maxPixels = 1e13,
+        tileScale = 16,
+        eightConnected = False); 
+    changeShapes = changeShapes.map(addArea);
+    largeChanges = changeShapes.filter(ee.Filter.gt('area', 40468));
+    return largeChanges.getInfo();
+
+
+# exports to Google Drive
+def exportSHP(image, exportName,productName):
   geometries=states.map(getGeometry).getInfo().get('features')
-  #print ('geometries', geometries)
   # loop on client side
   #https://gis.stackexchange.com/questions/236707/how-can-i-export-a-set-of-images-from-google-earth-engine/237065#237065
   for geom in geometries:
     feature=ee.Feature(geom);
+    grids=(feature.geometry(1).coveringGrid(feature.geometry(1).projection(),250000));
     abbr = feature.get('state_abbr').getInfo();
     region = ee.Geometry(geometry).intersection(feature.geometry(),1).bounds();
     print(abbr+' geometry', region.getInfo());
     #https://gis.stackexchange.com/questions/326131/error-in-export-image-from-google-earth-engine-from-python-api
-    task_config={'image':image,
-              'region':region,
-              'description':exportName+abbr,
-              'scale':30,
-              'maxPixels':1e13,
-              'formatOptions': {'cloudOptimized': True}}
+    fc =grids.map(createStateShapes(feature, image))
+    fc =fc.flatten()
+    task_config={'collection': fc, 'description': 'SWIR-Custom-Change-Between-'+startYear+'-and-'+secondYear+'shapes'+productName}
     task = ee.batch.Export.image.toDrive(**task_config)
     task.start()
     ids_file.write(',{0}'.format(task.id))
 
 # exports image to Google Drive for a larger area than states
-def exportRegionGeoTiff(image, exportName):
+def exportRegionGeoTiff(image, exportName, productName):
   conus = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'PR'),(ee.Filter.eq('state_abbr', 'VI'))).Not()).geometry().bounds();
   prvi = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'PR'),(ee.Filter.eq('state_abbr', 'VI')))).geometry().bounds();
   task_config={'image':image,
@@ -136,7 +155,6 @@ def exportRegionGeoTiff(image, exportName):
                'description':exportName+productName+'CONUS',
                'scale':30,
                'maxPixels':1e13,
-#               'shardSize': 10*256,
                'fileDimensions': [35840,56320],
                'formatOptions': {'cloudOptimized': True}}
   task = ee.batch.Export.image.toDrive(**task_config)
@@ -164,7 +182,7 @@ water = ee.Image("users/landsatfact/sgsfWaterMask")
 S2, startYear = parseCmdLine() 
 ids_file = open(ids_file, "w")
 LANDSAT8 = 'LANDSAT/LC08/C01/T1_SR'
-Sentinel2 = 'COPERNICUS/S2'
+Sentinel2 = 'COPERNICUS/S2_SR'
 beginDay='-11-01'
 endDay='-03-31'
 secondYear = str(int(startYear)-1)
@@ -201,18 +219,17 @@ else:
 # from the beginning of secondYear winter in secondYear - 1 to end of startYear winter in startYear + 1
 
 #for cloud masking with S2_CLOUD_PROBABILITY which is roughly 4 times slower
-'''
+
 if S2:
     collectionRangeStart = maskedS2Collection(secondYear + beginDay, startYear + endDay).map(addDateBand)
     collectionRangeEnd = maskedS2Collection(startYear + beginDay, endWinter + endDay).map(addDateBand)
     compositeRangeStart = collectionRangeStart.median()
     compositeRangeEnd = collectionRangeEnd.median()
-else:'''
-collectionRangeStart = ee.ImageCollection(SATELLITE).filter(ee.Filter.date(secondYear + beginDay, startYear + endDay)).map(addDateBand)
-collectionRangeEnd = ee.ImageCollection(SATELLITE).filter(ee.Filter.date(startYear + beginDay, endWinter + endDay)).map(addDateBand)
-compositeRangeStart = collectionRangeStart.map(mask).median()
-compositeRangeEnd = collectionRangeEnd.map(mask).median()
-
+else:
+    collectionRangeStart = ee.ImageCollection(SATELLITE).filter(ee.Filter.date(secondYear + beginDay, startYear + endDay)).map(addDateBand)
+    collectionRangeEnd = ee.ImageCollection(SATELLITE).filter(ee.Filter.date(startYear + beginDay, endWinter + endDay)).map(addDateBand)
+    compositeRangeStart = collectionRangeStart.map(mask).median()
+    compositeRangeEnd = collectionRangeEnd.map(mask).median()
 compositeStartYear = compositeRangeEnd # Start Year average - "custom request"
 compositeSecondYear = compositeRangeStart # Second Year average - "custom request"
 
@@ -227,8 +244,8 @@ compositeSecondYear = compositeSecondYear.updateMask(water.select('b1').neq(1))
 SWIRChangeCustomRange = oneBandDiff(compositeSecondYear,compositeStartYear, swir2)
 
 # First export the set of imagery sources for each pixel comparison used in building SWIRChangeCustomRange
-exportRegionGeoTiff(compositeStartYear.select(['system:time_start'], ['observationDate']), 'SWIR-Custom-Change-Between-'+startYear+'-and-'+secondYear+'datesBegin')
-exportRegionGeoTiff(compositeSecondYear.select(['system:time_start'], ['observationDate']), 'SWIR-Custom-Change-Between-'+startYear+'-and-'+secondYear+'datesEnd')
+#exportRegionGeoTiff(compositeStartYear.select(['system:time_start'], ['observationDate']), 'SWIR-Custom-Change-Between-'+startYear+'-and-'+secondYear+'datesBegin',productName)
+#exportRegionGeoTiff(compositeSecondYear.select(['system:time_start'], ['observationDate']), 'SWIR-Custom-Change-Between-'+startYear+'-and-'+secondYear+'datesEnd',productName)
 # Then the set of scenes used in building the images
 ag_array=collectionRangeStart.filterBounds(geometry).distinct(dateID).aggregate_array(dateID)
 fc = ee.FeatureCollection(ag_array.map(sceneFeatures))
@@ -243,4 +260,5 @@ task = ee.batch.Export.table.toDrive(**task_config)
 task.start()
 ids_file.write(',{0}'.format(task.id))
 #Lastly export the yearly product
-exportGeoTiff(SWIRChangeCustomRange, 'SWIR-Custom-Change-Between-'+startYear+'-and-'+secondYear)
+exportRegionGeoTiff(SWIRChangeCustomRange, 'SWIR-Custom-Change-Between-'+startYear+'-and-'+secondYear,productName)
+#exportSHP(SWIRChangeCustomRange, 'SWIR-Custom-Change-Between-'+startYear+'-and-'+secondYear,productName)

@@ -1,4 +1,5 @@
-import ee, time, datetime, argparse, pdb, pathlib, shutil
+
+import ee, time, datetime, argparse, pdb, pathlib, shutil, collections
 from userConfig import ids_file
 
 def parseCmdLine():
@@ -162,14 +163,18 @@ def exportRegionGeoTiff(image, indexName,startYear, secondYear):
  
 def sceneFeatures(scene):
   return ee.Feature(geometry, {'value': scene})
-    
+  
 # create my workspaces, but no complaints if they are already there
 path = pathlib.Path('/mnt/efs/fs1/GeoTIFF')    
 path.mkdir(parents=True, exist_ok=True)
 path = pathlib.Path('/mnt/efs/fs1/output')    
 path.mkdir(parents=True, exist_ok=True)
-  
-ee.Initialize()
+
+service_account = 'aws-southfact-product-generati@awsproductgeneration.iam.gserviceaccount.com'
+credentials = ee.ServiceAccountCredentials(service_account, '../keys/awsproductgeneration-8463a020b9aa.json')
+collections.Callable = collections.abc.Callable
+ee.Initialize(credentials)
+
 states = ee.FeatureCollection("users/landsatfact/SGSF_states")
 prvi = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'PR'),(ee.Filter.eq('state_abbr', 'VI')))).geometry().bounds();
 conus1 = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'KY'),(ee.Filter.eq('state_abbr', 'VA')),
