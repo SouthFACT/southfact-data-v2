@@ -1,4 +1,8 @@
-# output location for assets, etc. use your GEE user name e.g.,
-USERNAME='foo'
-AWS_ACCESS_KEY_ID='bar'
-AWS_SECRET_ACCESS_KEY='baz'
+#Credentials
+AWS_ACCESS_KEY_ID='fu'
+AWS_SECRET_ACCESS_KEY='bar'
+AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, 
+DRIVE_CLIENT_ID = "baz"
+DRIVE_CLIENT_SECRET = "blip" 
+DRIVE_REFRESH_TOKEN = 'blip2'
+DRIVE_TOKEN_URI = "blip3"
