@@ -49,10 +49,12 @@ def upload_file(file_name, bucket, object_name=None):
 #     [outRasterPath] - full path to the output raster in epsg:5070 projection
 # @return errcode
 def mosaic(inRasterList, outRasterPath):
+
     #pdb.set_trace()
     gdal.SetConfigOption('CHECK_DISK_FREE_SPACE', 'FALSE')
     gdal.Warp(outRasterPath, inRasterList, options= '-of COG' + " -overwrite -multi -wm 1296 -t_srs EPSG:5070 -co TILED=YES -co BIGTIFF=YES -co COMPRESS=DEFLATE -co NUM_THREADS=ALL_CPUS -co COPY_SRC_OVERVIEWS=YES")
 #
+
 # Utility function to convert a TIFF to GeoTIFF
 # @param
 #     [inRaster] - a list of rasters
@@ -185,6 +187,7 @@ def downloadedToShape(p,rasterName):
 # If modifying these scopes, delete the file token.pickle.
 SCOPES = ['https://www.googleapis.com/auth/drive']
 def main():
+
     try:
         """Using the Drive v3 API to download products from GEE for upload to S3."""
         yearly, year, bucket = parseCmdLine()   
@@ -192,6 +195,7 @@ def main():
             productName = 'YearlyChange' + year
             bucketName = bucket
             csvString = "\'SWIR-Custom-Change-Between-*\'"
+
         else:
             productName = 'LatestChange'
             bucketName = 'current-year-to-date/'
@@ -276,6 +280,7 @@ def main():
         shutil.rmtree('/mnt/efs/fs1/GeoTIFF')  
         shutil.rmtree('/mnt/efs/fs1/output')  
         print ('Finished at {0}'.format(datetime.datetime.now().strftime("%a, %d %B %Y %H:%M:%S")))
+
 
 if __name__ == '__main__':
     main()

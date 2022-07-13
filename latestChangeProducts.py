@@ -1,6 +1,6 @@
+
 import ee, time, datetime, argparse, pdb, pathlib, shutil, collections
 from userConfig import ids_file
-
 
 def parseCmdLine():
     # Will parse the arguments provided on the command line.
@@ -163,7 +163,7 @@ def exportRegionGeoTiff(image, indexName,startYear, secondYear):
  
 def sceneFeatures(scene):
   return ee.Feature(geometry, {'value': scene})
-   
+  
 # create my workspaces, but no complaints if they are already there
 path = pathlib.Path('/mnt/efs/fs1/GeoTIFF')    
 path.mkdir(parents=True, exist_ok=True)
