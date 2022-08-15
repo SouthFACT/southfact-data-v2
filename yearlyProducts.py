@@ -1,7 +1,6 @@
 import ee, datetime, argparse, pdb, collections
-from userConfig import ids_file
-service_account = 'aws-southfact-product-generati@awsproductgeneration.iam.gserviceaccount.com'
-credentials = ee.ServiceAccountCredentials(service_account, '../keys/awsproductgeneration-8463a020b9aa.json')
+from userConfig import ids_file, geeService_account, geeServiceAccountCredentials
+geeService_account, geeServiceAccountCredentials
 collections.Callable = collections.abc.Callable
 ee.Initialize(credentials)
 
@@ -176,7 +175,8 @@ def exportRegionGeoTiff(image, exportName, productName):
 
 def sceneFeatures(scene):
   return ee.Feature(geometry, {'value': scene})
- 
+
+boundary = ee.FeatureCollection("users/landsatfact/SGSFCONUSBoundary") 
 states = ee.FeatureCollection("users/landsatfact/SGSF_states")
 water = ee.Image("users/landsatfact/sgsfWaterMask")
 S2, startYear = parseCmdLine() 
@@ -219,17 +219,16 @@ else:
 # from the beginning of secondYear winter in secondYear - 1 to end of startYear winter in startYear + 1
 
 #for cloud masking with S2_CLOUD_PROBABILITY which is roughly 4 times slower
-
+'''
 if S2:
     collectionRangeStart = maskedS2Collection(secondYear + beginDay, startYear + endDay).map(addDateBand)
     collectionRangeEnd = maskedS2Collection(startYear + beginDay, endWinter + endDay).map(addDateBand)
     compositeRangeStart = collectionRangeStart.median()
     compositeRangeEnd = collectionRangeEnd.median()
-else:
-    collectionRangeStart = ee.ImageCollection(SATELLITE).filter(ee.Filter.date(secondYear + beginDay, startYear + endDay)).map(addDateBand)
-    collectionRangeEnd = ee.ImageCollection(SATELLITE).filter(ee.Filter.date(startYear + beginDay, endWinter + endDay)).map(addDateBand)
-    compositeRangeStart = collectionRangeStart.map(mask).median()
-    compositeRangeEnd = collectionRangeEnd.map(mask).median()
+else:'''
+collectionRangeStart = ee.ImageCollection(SATELLITE).filterDate(lastWinterBeginDate,t2.advance(-30,'day')).filterDate(lastWinterBeginDate, lastWinterEndDate).map(addDateBand)
+# debuging
+collectionRangeEnd = ee.ImageCollection(SATELLITE).filterDate(beginRangeEndDate, endRangeEndDate).map(addDateBand)
 compositeStartYear = compositeRangeEnd # Start Year average - "custom request"
 compositeSecondYear = compositeRangeStart # Second Year average - "custom request"
 
@@ -260,5 +259,5 @@ task = ee.batch.Export.table.toDrive(**task_config)
 task.start()
 ids_file.write(',{0}'.format(task.id))
 #Lastly export the yearly product
-exportRegionGeoTiff(SWIRChangeCustomRange, 'SWIR-Custom-Change-Between-'+startYear+'-and-'+secondYear,productName)
+exportRegionGeoTiff(SWIRChangeCustomRange.clipToCollection(boundary), 'SWIR-Custom-Change-Between-'+startYear+'-and-'+secondYear,productName)
 #exportSHP(SWIRChangeCustomRange, 'SWIR-Custom-Change-Between-'+startYear+'-and-'+secondYear,productName)
