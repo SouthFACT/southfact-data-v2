@@ -9,7 +9,7 @@ from googleapiclient.http import MediaIoBaseDownload
 from osgeo import gdal
 from os.path import isfile, join
 from pathlib import Path
-from userConfig import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, downloadDir, outputGeoTIFFDir, ids_file, drive_key_file, credentials_file
+from userConfig import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, downloadDir, outputGeoTIFFDir, ids_file, drive_key_file, credentials_file, geeService_account, geeServiceAccountCredentials
 from oauth2client.service_account import ServiceAccountCredentials
 from contextlib import redirect_stdout
 outputDir = outputGeoTIFFDir
@@ -204,8 +204,7 @@ def main():
         creds = None
         #pdb.set_trace() 
 
-        service_account = 'aws-southfact-product-generati@awsproductgeneration.iam.gserviceaccount.com'
-        credentials = ee.ServiceAccountCredentials(service_account, '../keys/awsproductgeneration-8463a020b9aa.json')
+        credentials = ee.ServiceAccountCredentials(geeService_account,geeServiceAccountCredentials)
         collections.Callable = collections.abc.Callable
         ee.Initialize(credentials)
         driveCredentials=ServiceAccountCredentials.from_json_keyfile_name('../keys/awsproductgeneration-8463a020b9aa.json', scopes=SCOPES)
@@ -215,10 +214,10 @@ def main():
         ids = text_file.read().split(',')
         ids = list(filter(None, ids))
         tasks = ee.data.getTaskList() 
-        print('ids ',ids)
+        #print('ids ',ids)
         tasks = ee.data.getTaskList()
         
-        print('tasks2 ', tasks)
+        #print('tasks2 ', tasks)
         myTasks = list(filter(lambda x: x['id'] in ids, tasks))     
         print('Begin download at {0}'.format(datetime.datetime.now().strftime("%a, %d %B %Y %H:%M:%S")))
         while True:
@@ -277,8 +276,8 @@ def main():
     except Exception as e: print(e)
     finally:
         #clean up my mess
-        shutil.rmtree('/mnt/efs/fs1/GeoTIFF')  
-        shutil.rmtree('/mnt/efs/fs1/output')  
+        shutil.rmtree('/mnt/efs/fs1/GeoTIFF', ignore_errors=True)  
+        shutil.rmtree('/mnt/efs/fs1/output', ignore_errors=True)  
         print ('Finished at {0}'.format(datetime.datetime.now().strftime("%a, %d %B %Y %H:%M:%S")))
 
 

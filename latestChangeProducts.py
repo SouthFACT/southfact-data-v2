@@ -1,6 +1,6 @@
 
 import ee, time, datetime, argparse, pdb, pathlib, shutil, collections
-from userConfig import ids_file
+from userConfig import ids_file, geeService_account, geeServiceAccountCredentials
 
 def parseCmdLine():
     # Will parse the arguments provided on the command line.
@@ -170,11 +170,10 @@ path.mkdir(parents=True, exist_ok=True)
 path = pathlib.Path('/mnt/efs/fs1/output')    
 path.mkdir(parents=True, exist_ok=True)
 
-service_account = 'aws-southfact-product-generati@awsproductgeneration.iam.gserviceaccount.com'
-credentials = ee.ServiceAccountCredentials(service_account, '../keys/awsproductgeneration-8463a020b9aa.json')
+credentials = ee.ServiceAccountCredentials(geeService_account,geeServiceAccountCredentials)
 collections.Callable = collections.abc.Callable
 ee.Initialize(credentials)
-
+boundary = ee.FeatureCollection("users/landsatfact/SGSFCONUSBoundary")
 states = ee.FeatureCollection("users/landsatfact/SGSF_states")
 prvi = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'PR'),(ee.Filter.eq('state_abbr', 'VI')))).geometry().bounds();
 conus1 = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'KY'),(ee.Filter.eq('state_abbr', 'VA')),
@@ -193,10 +192,14 @@ startYear = t2.get('year').getInfo()
 t3 = t2.advance(-1, 'year')
 secondYear = t3.get('year').getInfo()
 
+beginRangeEndDate = ee.Date.fromYMD(secondYear, 11, 1, 'America/New_York')
+endRangeEndDate = ee.Date.fromYMD(secondYear, 12, 31, 'America/New_York')
+
 t4 = t3.advance(-1, 'year')
 beginWinter = t4.get('year')
 endWinter =(t2.advance(+1, 'year').get('year'))
 endDate=t2
+
 lastWinterBeginDate=ee.Date.fromYMD(secondYear, 11, 1, 'America/New_York')
 lastWinterEndDate=ee.Date.fromYMD(startYear, 3, 31, 'America/New_York')
 curentYearBeginDate=ee.Date.fromYMD(startYear, 1, 1, 'America/New_York')
@@ -246,7 +249,7 @@ if S2:
 else:'''
 collectionRangeStart = ee.ImageCollection(SATELLITE).filterDate(lastWinterBeginDate,t2.advance(-30,'day')).filterDate(lastWinterBeginDate, lastWinterEndDate).map(addDateBand)
 # debuging
-collectionRangeEnd = ee.ImageCollection(SATELLITE).filterDate('2021-11-01', '2021-12-31').map(addDateBand)
+collectionRangeEnd = ee.ImageCollection(SATELLITE).filterDate(beginRangeEndDate, endRangeEndDate).map(addDateBand)
 #collectionRangeEnd = ee.ImageCollection(SATELLITE).filterDate(curentYearBeginDate, endDate).map(addDateBand)
 
 ag_array=collectionRangeStart.filterBounds(geometry).distinct(dateID).aggregate_array(dateID)
@@ -294,9 +297,9 @@ SWIRChangeCustomRange = oneBandDiff(compositeSecondYear,compositeStartYear, swir
 #exportGeoTiff(RGBStartYear, 'RGB'+ startYear)
 #exportGeoTiff(RGBSecondYear, 'RGB'+ secondYear)
 
-exportRegionGeoTiff(NDVIChangeCustomRange,'NDVI',str(startYear),str(secondYear))
-exportRegionGeoTiff(SWIRChangeCustomRange,'SWIR',str(startYear),str(secondYear))
-exportRegionGeoTiff(NDMIChangeCustomRange,'NDMI',str(startYear),str(secondYear))
+exportRegionGeoTiff(NDVIChangeCustomRange.clipToCollection(boundary),'NDVI',str(startYear),str(secondYear))
+exportRegionGeoTiff(SWIRChangeCustomRange.clipToCollection(boundary),'SWIR',str(startYear),str(secondYear))
+exportRegionGeoTiff(NDMIChangeCustomRange.clipToCollection(boundary),'NDMI',str(startYear),str(secondYear))
 
 #export datetimes used for pixel values in one year of changes over the start and second years. Ignore metadata for now due to speed and Drive space concerns
 #exportRegionGeoTiff(compositeStartYear.select(['system:time_start'], ['observationDate']), 'SWIR-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear)+'datesBegin')
