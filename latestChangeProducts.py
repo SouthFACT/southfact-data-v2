@@ -125,7 +125,7 @@ def oneBandDiff(compositeYearOne, compositeYearTwo, band1):
   return image255
 
 def exportRegionGeoTiff(image, indexName,startYear, secondYear):						 
-  task_config={'image':image,
+  task_config={'image':image.clipToCollection(boundary),
                'region':conus1,
                'description':indexName+'-Latest-Change-Between-'+startYear+'-and-'+secondYear+productName+'CONUS',
                'scale':30,
@@ -137,7 +137,7 @@ def exportRegionGeoTiff(image, indexName,startYear, secondYear):
   task.start()
   ids_file.write(',{0}'.format(task.id))
 																
-  task_config={'image':image,
+  task_config={'image':image.clipToCollection(boundary),
                'region':conus2,
                'description':indexName+'1'+'-Latest-Change-Between-'+startYear+'-and-'+secondYear+productName+'CONUS',
                'scale':30,
@@ -297,9 +297,9 @@ SWIRChangeCustomRange = oneBandDiff(compositeSecondYear,compositeStartYear, swir
 #exportGeoTiff(RGBStartYear, 'RGB'+ startYear)
 #exportGeoTiff(RGBSecondYear, 'RGB'+ secondYear)
 
-exportRegionGeoTiff(NDVIChangeCustomRange.clipToCollection(boundary),'NDVI',str(startYear),str(secondYear))
-exportRegionGeoTiff(SWIRChangeCustomRange.clipToCollection(boundary),'SWIR',str(startYear),str(secondYear))
-exportRegionGeoTiff(NDMIChangeCustomRange.clipToCollection(boundary),'NDMI',str(startYear),str(secondYear))
+exportRegionGeoTiff(NDVIChangeCustomRange,'NDVI',str(startYear),str(secondYear))
+exportRegionGeoTiff(SWIRChangeCustomRange,'SWIR',str(startYear),str(secondYear))
+exportRegionGeoTiff(NDMIChangeCustomRange,'NDMI',str(startYear),str(secondYear))
 
 #export datetimes used for pixel values in one year of changes over the start and second years. Ignore metadata for now due to speed and Drive space concerns
 #exportRegionGeoTiff(compositeStartYear.select(['system:time_start'], ['observationDate']), 'SWIR-Latest-Change-Between-'+str(startYear)+'-and-'+str(secondYear)+'datesBegin')
