@@ -207,7 +207,7 @@ def main():
         credentials = ee.ServiceAccountCredentials(geeService_account,geeServiceAccountCredentials)
         collections.Callable = collections.abc.Callable
         ee.Initialize(credentials)
-        driveCredentials=ServiceAccountCredentials.from_json_keyfile_name('../keys/awsproductgeneration-8463a020b9aa.json', scopes=SCOPES)
+        driveCredentials=ServiceAccountCredentials.from_json_keyfile_name(geeServiceAccountCredentials, scopes=SCOPES)
         service = build('drive', 'v3', credentials=driveCredentials)
         #ee.Initialize()
         text_file = open(ids_file, "r")

@@ -1,4 +1,3 @@
-
 import ee, time, datetime, argparse, pdb, pathlib, shutil, collections
 from userConfig import ids_file, geeService_account, geeServiceAccountCredentials
 
@@ -148,6 +147,30 @@ def exportRegionGeoTiff(image, indexName,startYear, secondYear):
   task = ee.batch.Export.image.toDrive(**task_config)
   task.start()
   ids_file.write(',{0}'.format(task.id))
+  
+  task_config={'image':image.clipToCollection(boundary),
+               'region':conus3,
+               'description':indexName+'2'+'-Latest-Change-Between-'+startYear+'-and-'+secondYear+productName+'CONUS',
+               'scale':30,
+               'maxPixels':1e13,
+               'shardSize':256,
+               'fileDimensions': [75264,55808],
+               'formatOptions': {'cloudOptimized': True}}
+  task = ee.batch.Export.image.toDrive(**task_config)
+  task.start()
+  ids_file.write(',{0}'.format(task.id)) 
+
+  task_config={'image':image.clipToCollection(boundary),
+               'region':conus4,
+               'description':indexName+'4'+'-Latest-Change-Between-'+startYear+'-and-'+secondYear+productName+'CONUS',
+               'scale':30,
+               'maxPixels':1e13,
+               'shardSize':256,
+               'fileDimensions': [75264,55808],
+               'formatOptions': {'cloudOptimized': True}}
+  task = ee.batch.Export.image.toDrive(**task_config)
+  task.start()
+  ids_file.write(',{0}'.format(task.id))  
 																	
   task_config={'image':image,
                'region':prvi,
@@ -164,25 +187,28 @@ def exportRegionGeoTiff(image, indexName,startYear, secondYear):
 def sceneFeatures(scene):
   return ee.Feature(geometry, {'value': scene})
   
-# create my workspaces, but no complaints if they are already there
+# clean up any posssible leftovers
+shutil.rmtree('/mnt/efs/fs1/GeoTIFF', ignore_errors=True)  
+shutil.rmtree('/mnt/efs/fs1/output', ignore_errors=True) 
+# create my workspaces
 path = pathlib.Path('/mnt/efs/fs1/GeoTIFF')    
-path.mkdir(parents=True, exist_ok=True)
+path.mkdir(parents=True, exist_ok=False)
 path = pathlib.Path('/mnt/efs/fs1/output')    
-path.mkdir(parents=True, exist_ok=True)
+path.mkdir(parents=True, exist_ok=False)
 
 credentials = ee.ServiceAccountCredentials(geeService_account,geeServiceAccountCredentials)
 collections.Callable = collections.abc.Callable
-ee.Initialize(credentials)
+ee.Initialize(credentials=credentials,project='530411585169',opt_url='https://earthengine-highvolume.googleapis.com')
 boundary = ee.FeatureCollection("users/landsatfact/SGSFCONUSBoundary")
 states = ee.FeatureCollection("users/landsatfact/SGSF_states")
 prvi = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'PR'),(ee.Filter.eq('state_abbr', 'VI')))).geometry().bounds();
-conus1 = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'KY'),(ee.Filter.eq('state_abbr', 'VA')),
-                          (ee.Filter.eq('state_abbr', 'TN')),(ee.Filter.eq('state_abbr', 'NC')),
-                          (ee.Filter.eq('state_abbr', 'MS')),(ee.Filter.eq('state_abbr', 'AL')),
-                          (ee.Filter.eq('state_abbr', 'GA')),(ee.Filter.eq('state_abbr', 'SC')),
-                          (ee.Filter.eq('state_abbr', 'FL')))).geometry().bounds();
-conus2 = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'OK'),(ee.Filter.eq('state_abbr', 'TX')),
-                          (ee.Filter.eq('state_abbr', 'AR')),(ee.Filter.eq('state_abbr', 'LA')))).geometry().bounds();S2 = parseCmdLine() 
+conus1 = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'AL'),(ee.Filter.eq('state_abbr', 'MS')),(ee.Filter.eq('state_abbr', 'VA')),(ee.Filter.eq('state_abbr', 'TN')),(ee.Filter.eq('state_abbr', 'KY')))).geometry().bounds();
+conus2 = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'FL'),(ee.Filter.eq('state_abbr', 'GA')),(ee.Filter.eq('state_abbr', 'NC')),(ee.Filter.eq('state_abbr', 'SC')))).geometry().bounds()
+conus3 = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'OK'),(ee.Filter.eq('state_abbr', 'AR')),(ee.Filter.eq('state_abbr', 'LA')))).geometry().bounds()
+conus4 = states.filter(ee.Filter.eq('state_abbr', 'TX')).geometry().bounds();
+
+S2 = parseCmdLine() 
+
 ids_file = open(ids_file, "w")
 mstimeone = now_milliseconds()
 
@@ -199,7 +225,7 @@ t4 = t3.advance(-1, 'year')
 beginWinter = t4.get('year')
 endWinter =(t2.advance(+1, 'year').get('year'))
 endDate=t2
-
+endWinterDate=ee.Date.fromYMD(endWinter, 3, 31, 'America/New_York')
 lastWinterBeginDate=ee.Date.fromYMD(secondYear, 11, 1, 'America/New_York')
 lastWinterEndDate=ee.Date.fromYMD(startYear, 3, 31, 'America/New_York')
 curentYearBeginDate=ee.Date.fromYMD(startYear, 1, 1, 'America/New_York')
@@ -248,9 +274,7 @@ if S2:
     compositeRangeEnd = collectionRangeEnd.median()
 else:'''
 collectionRangeStart = ee.ImageCollection(SATELLITE).filterDate(lastWinterBeginDate,t2.advance(-30,'day')).filterDate(lastWinterBeginDate, lastWinterEndDate).map(addDateBand)
-# debuging
-collectionRangeEnd = ee.ImageCollection(SATELLITE).filterDate(beginRangeEndDate, endRangeEndDate).map(addDateBand)
-#collectionRangeEnd = ee.ImageCollection(SATELLITE).filterDate(curentYearBeginDate, endDate).map(addDateBand)
+collectionRangeEnd = ee.ImageCollection(SATELLITE).filterDate(curentYearBeginDate, endWinterDate).map(addDateBand)
 
 ag_array=collectionRangeStart.filterBounds(geometry).distinct(dateID).aggregate_array(dateID)
 fc = ee.FeatureCollection(ag_array.map(sceneFeatures))
