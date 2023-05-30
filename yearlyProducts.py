@@ -139,8 +139,7 @@ def createStateShapes(feature, image) :
     largeChanges = changeShapes.filter(ee.Filter.gt('area', 40468));
     return largeChanges.getInfo();
 
-
-# exports to Google Drive
+dir# exports to Google Drive
 def exportSHP(image, exportName,productName):
   geometries=states.map(getGeometry).getInfo().get('features')
   # loop on client side
@@ -277,4 +276,4 @@ task.start()
 ids_file.write(',{0}'.format(task.id))
 #Lastly export the yearly product
 exportRegionGeoTiff(SWIRChangeCustomRange, 'SWIR-Custom-Change-Between-'+startYear+'-and-'+secondYear,productName)
-#exportSHP(SWIRChangeCustomRange, 'SWIR-Custom-Change-Between-'+startYear+'-and-'+secondYear,productName)
+
