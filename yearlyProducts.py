@@ -139,7 +139,14 @@ def createStateShapes(feature, image) :
     largeChanges = changeShapes.filter(ee.Filter.gt('area', 40468));
     return largeChanges.getInfo();
 
-dir# exports to Google Drive
+dir
+
+
+
+
+
+
+# exports to Google Drive
 def exportSHP(image, exportName,productName):
   geometries=states.map(getGeometry).getInfo().get('features')
   # loop on client side
