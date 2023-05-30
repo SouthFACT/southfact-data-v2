@@ -1,6 +1,7 @@
 import ee, datetime, argparse, pdb, collections
-from userConfig import ids_file, geeService_account, geeServiceAccountCredentials
-geeService_account, geeServiceAccountCredentials
+from userConfig import ids_file
+service_account = 'aws-southfact-product-generati@awsproductgeneration.iam.gserviceaccount.com'
+credentials = ee.ServiceAccountCredentials(service_account, '../keys/awsproductgeneration-8463a020b9aa.json')
 collections.Callable = collections.abc.Callable
 ee.Initialize(credentials)
 
@@ -20,12 +21,16 @@ def addDateBand(image):
 
 def maskS2CloudsQA60(image):
   qa = image.select('QA60')
+
   # Bits 10 and 11 are clouds and cirrus, respectively.
   cloudBitMask = 1 << 10
   cirrusBitMask = 1 << 11
+
   # Both flags should be set to zero, indicating clear conditions.
   mask = qa.bitwiseAnd(cloudBitMask).eq(0).And(qa.bitwiseAnd(cirrusBitMask).eq(0))
   return image.updateMask(mask).divide(10000)
+
+  return image.updateMask(mask)
  
 # /**
 # * Function to mask clouds using the Sentinel-2 QA band
@@ -52,26 +57,35 @@ def maskedS2Collection (startDate, endDate):
   s2SrWithCloudMask = ee.Join.saveFirst('cloud_mask').apply(s2Sr, s2Clouds, ee.Filter.equals(leftField='system:index', rightField='system:index'))
   return ee.ImageCollection(s2SrWithCloudMask).map(maskS2Clouds)
   
+# Applies scaling factors.
+def applyScaleFactors(image) :
+  opticalBands = image.select('SR_B.').multiply(0.0000275).add(-0.2)
+  thermalBands = image.select('ST_B.*').multiply(0.00341802).add(149.0)
+  return image.addBands(opticalBands, None, True).addBands(thermalBands, None, True)
+
+ 
 # Function to cloud mask from the pixel_qa band of Landsat 8 SR data.
 def maskLandsatClouds(image):
-  # Bits 3 and 5 are cloud shadow and cloud, respectively.
-  cloudShadowBitMask = 1 << 3
-  cloudsBitMask = 1 << 5
-
+  cloudShadowBitMask = ee.Number(2).pow(4).int();
+  cloudsBitMask = ee.Number(2).pow(3).int();
+  cirrusBitMask = ee.Number(2).pow(2).int();
+  dilatedCloudsBitMask = ee.Number(2).pow(1).int();
   # Get the pixel QA band.
-  qa = image.select('pixel_qa')
+  qa = image.select('QA_PIXEL');
 
   # Both flags should be set to zero, indicating clear conditions.
   mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0).And(qa.bitwiseAnd(cloudsBitMask).eq(0))
-
-  # Return the masked image, scaled to TOA reflectance, without the QA bands.
-  return image.updateMask(mask).divide (10000).select("B[0-9]*").addBands(qa).addBands(image.select('system:time_start')).copyProperties(image, ['system:time_start'])
-
-# use gee normalizedDifference
-def normDiff(image, band1, band2):
-  return image.normalizedDifference([band1, band2])
-
-# force percent change image into a 0-255 range so it is true 8 bit image
+  # Scale to surface reflectance.
+  image = applyScaleFactors(image)
+  # Return the masked image, scaled to surface reflectance, without the QA bands.
+  return image.updateMask(mask).select("SR_B[0-9]*").addBands(qa).addBands(image.select('system:time_start')).copyProperties(image, ['system:time_start'])
+      
+# add band to identify unix time of every pixel used in the composite
+def addDateBand(image): 
+  #.set('system:time_start', img.get('system:time_start'))
+  return image.addBands(image.metadata('system:time_start')).copyProperties(image)
+  
+# force percent change image into a 0-255 range so it is true 8 bit image  
 def make255(image, band):
   imageLT127 = image.expression('b1 > 127 ? 127 : b1' ,{'b1': image.select(band)})
   image127 = imageLT127.expression('b1 < -127 ? -127 : b1' ,{'b1': imageLT127.select(band)})
@@ -149,7 +163,7 @@ def exportSHP(image, exportName,productName):
 def exportRegionGeoTiff(image, exportName, productName):
   conus = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'PR'),(ee.Filter.eq('state_abbr', 'VI'))).Not()).geometry().bounds();
   prvi = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'PR'),(ee.Filter.eq('state_abbr', 'VI')))).geometry().bounds();
-  task_config={'image':image,
+  task_config={'image':image.clipToCollection(boundary),
                'region':conus,
                'description':exportName+productName+'CONUS',
                'scale':30,
@@ -159,7 +173,7 @@ def exportRegionGeoTiff(image, exportName, productName):
   task = ee.batch.Export.image.toDrive(**task_config)
   task.start()
   ids_file.write(',{0}'.format(task.id))
-  task_config={'image':image,
+  task_config={'image':image.clipToCollection(boundary),
                'region':prvi,
                'description':exportName+productName+'PRVI',
                'scale':30,
@@ -175,14 +189,15 @@ def exportRegionGeoTiff(image, exportName, productName):
 
 def sceneFeatures(scene):
   return ee.Feature(geometry, {'value': scene})
-
-boundary = ee.FeatureCollection("users/landsatfact/SGSFCONUSBoundary") 
+ 
+boundary = ee.FeatureCollection("users/landsatfact/clipSGSFCONUS")
 states = ee.FeatureCollection("users/landsatfact/SGSF_states")
 water = ee.Image("users/landsatfact/sgsfWaterMask")
 S2, startYear = parseCmdLine() 
-ids_file = open(ids_file, "w")
-LANDSAT8 = 'LANDSAT/LC08/C01/T1_SR'
-Sentinel2 = 'COPERNICUS/S2_SR'
+pdb.set_trace()
+ids_file = open(ids_file, "w+")
+LANDSAT8 = 'LANDSAT/LC08/C02/T1_L2'
+Sentinel2 = 'COPERNICUS/S2_SR_HARMONIZED'
 beginDay='-11-01'
 endDay='-03-31'
 secondYear = str(int(startYear)-1)
@@ -199,20 +214,20 @@ if S2:
     green = 'B3'
     swir1 = 'B11'
     swir2 = 'B12'
-    SATELLITE = 'COPERNICUS/S2_SR'
+    SATELLITE = 'COPERNICUS/S2_SR_HARMONIZED'
     mask = maskS2CloudsQA60
     dateID = 'DATATAKE_IDENTIFIER'
     productName = 'S2'
 else:
-    nir = 'B5'
-    red = 'B4'
-    blue = 'B2'
-    green = 'B3'
-    swir1 = 'B6'
-    swir2 = 'B7'
-    SATELLITE = 'LANDSAT/LC08/C01/T1_SR'
+    nir = 'SR_B5'
+    red = 'SR_B4'
+    blue = 'SR_B2'
+    green = 'SR_B3'
+    swir1 = 'SR_B6'
+    swir2 = 'SR_B7'
+    SATELLITE = 'LANDSAT/LC08/C02/T1_L2'
     mask = maskLandsatClouds
-    dateID = 'LANDSAT_ID'
+    dateID = 'LANDSAT_SCENE_ID'
     productName = 'L8'
 #pdb.set_trace()
 # Collect one year of changes over the start and second years, for a date range  
@@ -226,9 +241,11 @@ if S2:
     compositeRangeStart = collectionRangeStart.median()
     compositeRangeEnd = collectionRangeEnd.median()
 else:'''
-collectionRangeStart = ee.ImageCollection(SATELLITE).filterDate(lastWinterBeginDate,t2.advance(-30,'day')).filterDate(lastWinterBeginDate, lastWinterEndDate).map(addDateBand)
-# debuging
-collectionRangeEnd = ee.ImageCollection(SATELLITE).filterDate(beginRangeEndDate, endRangeEndDate).map(addDateBand)
+collectionRangeStart = ee.ImageCollection(SATELLITE).filter(ee.Filter.date(secondYear + beginDay, startYear + endDay)).map(addDateBand)
+collectionRangeEnd = ee.ImageCollection(SATELLITE).filter(ee.Filter.date(startYear + beginDay, endWinter + endDay)).map(addDateBand)
+compositeRangeStart = collectionRangeStart.map(mask).median()
+compositeRangeEnd = collectionRangeEnd.map(mask).median()
+
 compositeStartYear = compositeRangeEnd # Start Year average - "custom request"
 compositeSecondYear = compositeRangeStart # Second Year average - "custom request"
 
@@ -259,5 +276,5 @@ task = ee.batch.Export.table.toDrive(**task_config)
 task.start()
 ids_file.write(',{0}'.format(task.id))
 #Lastly export the yearly product
-exportRegionGeoTiff(SWIRChangeCustomRange.clipToCollection(boundary), 'SWIR-Custom-Change-Between-'+startYear+'-and-'+secondYear,productName)
+exportRegionGeoTiff(SWIRChangeCustomRange, 'SWIR-Custom-Change-Between-'+startYear+'-and-'+secondYear,productName)
 #exportSHP(SWIRChangeCustomRange, 'SWIR-Custom-Change-Between-'+startYear+'-and-'+secondYear,productName)
