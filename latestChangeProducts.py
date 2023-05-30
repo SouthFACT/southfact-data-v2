@@ -26,7 +26,7 @@ def maskS2CloudsQA60(image):
 
   # Both flags should be set to zero, indicating clear conditions.
   mask = qa.bitwiseAnd(cloudBitMask).eq(0).And(qa.bitwiseAnd(cirrusBitMask).eq(0))
-  return image.updateMask(mask)
+  return image.updateMask(mask).divide(10000)
 
 def maskEdges(s2_img) :
   image=s2_img.updateMask(s2_img.select('B8A').mask().updateMask(s2_img.select('B9').mask()))
@@ -198,7 +198,7 @@ path.mkdir(parents=True, exist_ok=False)
 
 credentials = ee.ServiceAccountCredentials(geeService_account,geeServiceAccountCredentials)
 collections.Callable = collections.abc.Callable
-ee.Initialize(credentials=credentials,project='530411585169',opt_url='https://earthengine-highvolume.googleapis.com')
+ee.Initialize(credentials=credentials)
 boundary = ee.FeatureCollection("users/landsatfact/SGSFCONUSBoundary")
 states = ee.FeatureCollection("users/landsatfact/SGSF_states")
 prvi = states.filter(ee.Filter.Or(ee.Filter.eq('state_abbr', 'PR'),(ee.Filter.eq('state_abbr', 'VI')))).geometry().bounds();
@@ -239,7 +239,7 @@ if S2:
     green = 'B3'
     swir1 = 'B11'
     swir2 = 'B12'
-    SATELLITE = 'COPERNICUS/S2_SR'
+    SATELLITE = 'COPERNICUS/S2_SR_HARMONIZED'
     mask = maskS2CloudsQA60
     dateID = 'DATATAKE_IDENTIFIER'
     productName = 'S2'
